@@ -1,2 +1,6 @@
-# alen
-Simple terminal alignment viewer
+# Alen
+
+
+Simple terminal alignment viewer.
+
+## Work in progress!
