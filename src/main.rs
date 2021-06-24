@@ -3,11 +3,25 @@
 // To do: Auto-detect format and sequence kind
 //
 
+use std::io::Stdin;
 use std::io::{stdin, BufRead, BufReader};
 use bio::alphabets;
 use bio::io::fasta;
+use std::io::{self, stdin, stdout, BufRead, BufReader};
 use std::path::Path;
-use clap::{Arg, App};
+use std::time::Duration;
+
+use crossterm::{
+    event::{poll, read, Event, KeyCode},
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode},
+    Result,
+};
+
+enum StdinOrFile {
+    Stdin(std::io::Stdin),
+    File(std::fs::File),
+}
 
 // TODO: Protein/DNA alignment?
 #[derive(Debug)]
@@ -47,6 +61,27 @@ impl Alignment {
     }
 }
 
+fn display(aln: Alignment) {
+    enable_raw_mode().expect("Error enabling raw mode in terminal");
+    let aln = Alignment::new(BufReader::new(stdin()));
+    display(aln);
+    
+
+    loop {
+        poll(Duration::from_secs(1_000_000_000)).unwrap();
+        let event = read().unwrap();
+
+        println!("Event::{:?}\r", event);
+
+        // Break on Q or Esc
+        if event == Event::Key(KeyCode::Esc.into()) || event == Event::Key(KeyCode::Char('q').into()) {
+            break;
+        }
+    }
+    disable_raw_mode()
+}
+
+
 fn main() {
     let args = App::new("alen")
         .version("0.1")
@@ -66,13 +101,20 @@ fn main() {
         std::process::exit(1);
     }
 
+    let io = match(filename) {
+        "-" => StdinOrFile::Stdin(stdin()),
+        _   => StdinOrFile::File(File::open(filename).unwrap())
+    };
+    let aln = Alignment::new(BufReader::new(io));
+
+    /*
     let buffered_io: Box<dyn BufRead> = if filename == "-" {
         Box::new(BufReader::new(stdin()))
     } else {
         // TODO: Better error message?
         Box::new(BufReader::new(std::fs::File::open(filename).unwrap()))
     };
-
-    let aln = Alignment::new(buffered_io);
-    println!("{:?}", aln);
+    */
+    
+    display(aln);
 }
