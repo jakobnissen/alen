@@ -8,3 +8,4 @@ edition = "2018"
 
 [dependencies]
 bio = "0.34.0"
+crossterm = "0.20.0"

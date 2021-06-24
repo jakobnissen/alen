@@ -5,7 +5,15 @@
 
 use bio::alphabets;
 use bio::io::fasta;
-use std::io::{self, BufRead, BufReader};
+use std::io::{self, stdin, stdout, BufRead, BufReader};
+use std::time::Duration;
+
+use crossterm::{
+    event::{poll, read, Event, KeyCode},
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode},
+    Result,
+};
 
 // TODO: Protein/DNA alignment?
 #[derive(Debug)]
@@ -45,8 +53,31 @@ impl Alignment {
     }
 }
 
+fn display(aln: Alignment) {
+    loop {
+        poll(Duration::from_secs(1_000_000_000)).unwrap();
+        let event = read().unwrap();
+
+        println!("Event::{:?}\r", event);
+
+        // Break on Q or Esc
+        if event == Event::Key(KeyCode::Esc.into()) || event == Event::Key(KeyCode::Char('q').into()) {
+            break;
+        }
+    }
+}
+
+/*
 fn main() {
     let buffered = BufReader::new(io::stdin());
     let aln = Alignment::new(buffered);
     println!("{:?}", aln);
+}
+ */
+
+fn main() -> Result<()> {
+    enable_raw_mode().expect("Error enabling raw mode in terminal");
+    let aln = Alignment::new(BufReader::new(stdin()));
+    display(aln);
+    disable_raw_mode()
 }
