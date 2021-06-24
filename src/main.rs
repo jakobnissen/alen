@@ -3,9 +3,11 @@
 // To do: Auto-detect format and sequence kind
 //
 
+use std::io::{stdin, BufRead, BufReader};
 use bio::alphabets;
 use bio::io::fasta;
-use std::io::{self, BufRead, BufReader};
+use std::path::Path;
+use clap::{Arg, App};
 
 // TODO: Protein/DNA alignment?
 #[derive(Debug)]
@@ -46,7 +48,31 @@ impl Alignment {
 }
 
 fn main() {
-    let buffered = BufReader::new(io::stdin());
-    let aln = Alignment::new(buffered);
+    let args = App::new("alen")
+        .version("0.1")
+        .author("Jakob Nybo Nissen <jakobnybonissen@gmail.com>")
+        .about("Simple alignment viewer")
+        .arg(Arg::with_name("alignment")
+            .help("Input alignment in FASTA format (- for stdin)")
+            .takes_value(true)
+            .required(true)
+        ).get_matches();
+
+    let filename = args.value_of("alignment").unwrap();
+
+    // Check if file exists
+    if filename != "-" && !Path::new(filename).is_file() {
+        println!("Error: Filename not found: \"{}\"", filename);
+        std::process::exit(1);
+    }
+
+    let buffered_io: Box<dyn BufRead> = if filename == "-" {
+        Box::new(BufReader::new(stdin()))
+    } else {
+        // TODO: Better error message?
+        Box::new(BufReader::new(std::fs::File::open(filename).unwrap()))
+    };
+
+    let aln = Alignment::new(buffered_io);
     println!("{:?}", aln);
 }
