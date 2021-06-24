@@ -3,27 +3,23 @@
 // To do: Auto-detect format and sequence kind
 //
 
-use std::io::Stdin;
 use std::io::{stdin, BufRead, BufReader};
 use bio::alphabets;
 use bio::io::fasta;
-use std::io::{self, stdin, stdout, BufRead, BufReader};
 use std::path::Path;
 use std::time::Duration;
+use clap;
 
 use crossterm::{
+    cursor,
     event::{poll, read, Event, KeyCode},
-    execute,
-    terminal::{disable_raw_mode, enable_raw_mode},
+    execute, queue, style,
+    terminal::{self, disable_raw_mode, enable_raw_mode, ClearType},
     Result,
 };
 
-enum StdinOrFile {
-    Stdin(std::io::Stdin),
-    File(std::fs::File),
-}
-
 // TODO: Protein/DNA alignment?
+// TODO: Remove this debug
 #[derive(Debug)]
 struct Alignment {
     names: Vec<String>,
@@ -62,10 +58,21 @@ impl Alignment {
 }
 
 fn display(aln: Alignment) {
-    enable_raw_mode().expect("Error enabling raw mode in terminal");
-    let aln = Alignment::new(BufReader::new(stdin()));
-    display(aln);
+    let mut io = std::io::stdout();
+    enable_raw_mode().unwrap();
+    execute!(io, terminal::EnterAlternateScreen).unwrap();
     
+    queue!(
+        io,
+        style::ResetColor,
+        terminal::Clear(ClearType::All),
+        cursor::Hide,
+        cursor::MoveTo(0, 0)
+    ).unwrap();
+
+    println!("Type [Esc] or 'q' to quit.");
+
+    queue!(io, cursor::MoveToColumn(0));
 
     loop {
         poll(Duration::from_secs(1_000_000_000)).unwrap();
@@ -78,16 +85,23 @@ fn display(aln: Alignment) {
             break;
         }
     }
-    disable_raw_mode()
+
+    execute!(
+        io,
+        style::ResetColor,
+        cursor::Show,
+        terminal::LeaveAlternateScreen
+    ).unwrap();
+    disable_raw_mode().unwrap();
 }
 
 
 fn main() {
-    let args = App::new("alen")
+    let args = clap::App::new("alen")
         .version("0.1")
         .author("Jakob Nybo Nissen <jakobnybonissen@gmail.com>")
         .about("Simple alignment viewer")
-        .arg(Arg::with_name("alignment")
+        .arg(clap::Arg::with_name("alignment")
             .help("Input alignment in FASTA format (- for stdin)")
             .takes_value(true)
             .required(true)
@@ -101,20 +115,13 @@ fn main() {
         std::process::exit(1);
     }
 
-    let io = match(filename) {
-        "-" => StdinOrFile::Stdin(stdin()),
-        _   => StdinOrFile::File(File::open(filename).unwrap())
-    };
-    let aln = Alignment::new(BufReader::new(io));
-
-    /*
     let buffered_io: Box<dyn BufRead> = if filename == "-" {
         Box::new(BufReader::new(stdin()))
     } else {
         // TODO: Better error message?
         Box::new(BufReader::new(std::fs::File::open(filename).unwrap()))
     };
-    */
+    let aln = Alignment::new(BufReader::new(buffered_io));
     
     display(aln);
 }
