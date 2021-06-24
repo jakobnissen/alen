@@ -3,19 +3,22 @@
 // To do: Auto-detect format and sequence kind
 //
 
-use std::io::{stdin, BufRead, BufReader};
+use std::io::{stdin, BufRead, BufReader, Write};
 use bio::alphabets;
 use bio::io::fasta;
 use std::path::Path;
 use std::time::Duration;
+use std::cmp::min;
+
 use clap;
+use unicode_segmentation::UnicodeSegmentation;
 
 use crossterm::{
     cursor,
     event::{poll, read, Event, KeyCode},
-    execute, queue, style,
+    execute, queue,
+    style::{self, Print},
     terminal::{self, disable_raw_mode, enable_raw_mode, ClearType},
-    Result,
 };
 
 // TODO: Protein/DNA alignment?
@@ -27,6 +30,14 @@ struct Alignment {
 }
 
 impl Alignment {
+    fn nrows(&self) -> usize {
+        self.names.len()
+    }
+
+    fn ncols(&self) -> usize {
+        self.seqs[0].len()
+    }
+
     fn new<T: BufRead>(file: T) -> Alignment {
         let mut seqs = Vec::new();
         let mut names: Vec<String> = Vec::new();
@@ -53,11 +64,49 @@ impl Alignment {
             names.push(record.id().to_owned());
         }
         // TODO: Warn if two headers are identical
+        if seqlength.map_or(true, |i| i < 1) {
+            panic!("Error: Empty alignment") // TODO: More precise error
+        }
         Alignment{names, seqs}
     }
 }
 
-fn display(aln: Alignment) {
+struct View {
+    rowstart: usize,
+    colstart: usize,
+    nrows: u16,
+    ncols: u16,
+    namewidth: u16,
+    padded_names: Vec<String>,
+    aln: Alignment
+}
+
+impl View {
+    fn new(aln: Alignment) -> View {
+        let (nrows, ncols) = terminal::size().unwrap();
+        let namewidth = min(30, nrows >> 2);
+        let padded_names = View::padded_names(&aln, namewidth);
+        View {rowstart: 1, colstart: 1, nrows, ncols, namewidth, padded_names, aln}
+    }
+
+    fn padded_names(aln: &Alignment, width: u16) -> Vec<String> {
+        let mut result = Vec::new();
+        for name in aln.names.iter() {
+            let pvec = UnicodeSegmentation::graphemes(name.as_str(), true)
+                .take(width as usize).collect::<Vec<_>>();
+            let mut str = pvec.join("");
+            str.push_str(" ".repeat((width as usize) - pvec.len()).as_str());
+            result.push(str);
+        }
+        return result
+    }
+
+    fn rowmax(&self) -> usize {
+        min(self.aln.nrows() - 1, self.rowstart + self.nrows as usize - 1)
+    }
+}
+
+fn display(view: View) {
     let mut io = std::io::stdout();
     enable_raw_mode().unwrap();
     execute!(io, terminal::EnterAlternateScreen).unwrap();
@@ -71,8 +120,7 @@ fn display(aln: Alignment) {
     ).unwrap();
 
     println!("Type [Esc] or 'q' to quit.");
-
-    queue!(io, cursor::MoveToColumn(0));
+    draw_names(&io, &view);
 
     loop {
         poll(Duration::from_secs(1_000_000_000)).unwrap();
@@ -95,6 +143,30 @@ fn display(aln: Alignment) {
     disable_raw_mode().unwrap();
 }
 
+fn draw_names<T: Write>(mut io: T, view: &View) {
+    //let first_tick_col = view.namewidth as u64 + 1 + (view.colstart as u64 % 10);
+    queue!(io, cursor::MoveTo(0, 0)).unwrap();
+    let mut ruler = String::new(); // ┌─┴
+    let mut counter = String::new();
+    queue!(
+            io,
+            cursor::MoveTo(0, 0),
+            Print(counter),
+            cursor::MoveTo(0, 1),
+            Print(ruler),
+    ).unwrap();
+    
+    let ruler_height = 2;
+    for (termrow, alnrow) in (view.rowstart..view.rowmax()).enumerate() {
+        queue!(io, cursor::MoveTo(0, (termrow + ruler_height) as u16)).unwrap();
+        print!("{}|", view.padded_names[alnrow]);
+    }
+    io.flush().unwrap();
+}
+
+fn draw_bottom<T: Write>(mut io: T, view: View) {
+    unimplemented!()
+}
 
 fn main() {
     let args = clap::App::new("alen")
@@ -122,6 +194,6 @@ fn main() {
         Box::new(BufReader::new(std::fs::File::open(filename).unwrap()))
     };
     let aln = Alignment::new(BufReader::new(buffered_io));
-    
-    display(aln);
+    let view = View::new(aln);
+    display(view);
 }
