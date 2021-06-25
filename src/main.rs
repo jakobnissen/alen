@@ -2,6 +2,7 @@
 #![allow(dead_code)]
 #![allow(unused_variables)]
 
+use std::convert::TryInto;
 use std::io::{stdin, BufRead, BufReader, Write};
 use std::ops::RangeInclusive;
 use bio::alphabets;
@@ -15,7 +16,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use crossterm::{
     cursor,
-    event::{poll, read, Event, KeyCode},
+    event::{self, poll, read, Event, KeyCode, KeyEvent},
     execute, queue,
     style::{self, Print, Stylize, Color, SetBackgroundColor, SetForegroundColor, ResetColor},
     terminal::{self, disable_raw_mode, enable_raw_mode, ClearType},
@@ -86,18 +87,20 @@ struct View {
     aln: Alignment
 }
 
-fn calculate_start(current: usize, displaysize: usize, n_rows_cols: usize) -> usize {
-    let last_index = n_rows_cols - 1;
-    // If we would exceed the alignment...
-    if current + displaysize > last_index + 1 {
-        // If we can display all of them, we are fixed at position 0
-        if displaysize >= n_rows_cols {
-            return 0
-        } else {
-            return n_rows_cols - displaysize
-        }
+fn calculate_start(
+    current: usize,
+    delta: isize,
+    displaysize: usize,
+    n_rows_cols: usize,
+) -> usize {
+    let last_index = n_rows_cols - displaysize;
+    let moveto = (current as isize) + delta;
+    if moveto < 0 {
+        return 0
+    } else if (moveto as usize) > last_index {
+        return last_index
     } else {
-        return current
+        return moveto.try_into().unwrap()
     }
 }
 
@@ -125,13 +128,39 @@ impl View {
         self.term_ncols = term_col;
         
         // Calculate new starts (if you zoom out)
-        self.rowstart = calculate_start(oldrow, self.nseqs_display(), self.aln.nrows());
-        self.colstart = calculate_start(oldcol, self.ncols_display(), self.aln.ncols());
+        self.rowstart = calculate_start(
+            oldrow, 0, 
+            self.seq_nrows_display(), self.aln.nrows()
+        );
+        self.colstart = calculate_start(
+            oldcol, 0, 
+            self.seq_ncols_display(), self.aln.ncols()
+        );
 
         // Set namewidth and padded names
         // TODO: Better calculation of namewidth, so it doesn't reset if you modify it
         self.namewidth = min(30, term_col >> 2);
         self.update_padded_names();
+    }
+
+    fn move_view<T: Write>(&mut self, io: &mut T, dy: isize, dx: isize) {
+        self.rowstart = calculate_start(
+            self.rowstart, dy, 
+            self.term_nrows as usize, self.aln.nrows()
+        );
+        self.colstart = calculate_start(
+            self.colstart, dx, 
+            self.term_ncols as usize, self.aln.ncols()
+        );
+        if dy != 0 {
+            self.update_padded_names();
+            draw_names(io, &self);
+        }
+        if dx != 0 {
+            //draw_ruler(io, &self) // TODO
+        }
+        draw_sequences(io, &self);
+        io.flush().unwrap();
     }
 
     /// Update the vector of padded_names, only including the ones that
@@ -148,59 +177,50 @@ impl View {
         }
 
         // Else, we can guarantee width is at least 1
-        for name in self.aln.names[self.seq_row_range()].iter() {
-            let mut grapheme_iter = UnicodeSegmentation::graphemes(name.as_str(), true);
-            let mut strvec = (&mut grapheme_iter).take(width - 1).collect::<Vec<_>>();
-            if strvec.len() == (width - 1) {
-                strvec.push("…");
-            } else if let Some(grapheme) = grapheme_iter.next() {
-                strvec.push(grapheme)
+        if let Some(range) = self.seq_row_range() {
+            for name in self.aln.names[range].iter() {
+                let mut grapheme_iter = UnicodeSegmentation::graphemes(name.as_str(), true);
+                let mut strvec = (&mut grapheme_iter).take(width - 1).collect::<Vec<_>>();
+                if strvec.len() == (width - 1) {
+                    strvec.push("…");
+                } else if let Some(grapheme) = grapheme_iter.next() {
+                    strvec.push(grapheme)
+                }
+                let mut str = strvec.join("");
+                str.push_str(" ".repeat(width - strvec.len()).as_str());
+                self.padded_names.push(str);
             }
-            let mut str = strvec.join("");
-            str.push_str(" ".repeat(width - strvec.len()).as_str());
-            self.padded_names.push(str);
         }
     }
 
-    fn nseqs_display(&self) -> usize {
-        (self.term_nrows as usize) - (HEADER_LINES + FOOTER_LINES)
+    fn seq_nrows_display(&self) -> usize {
+        (self.term_nrows as usize).saturating_sub(HEADER_LINES + FOOTER_LINES)
     }
 
     fn seq_row_range(&self) -> Option<RangeInclusive<usize>> {
-        let nrows = self.nseqs_display();
-        if nrows == 0 {
-            return None
-        } else
-        {
-            return Some((self.rowstart)..=(
-                min(
-                self.aln.nrows() - 1, // zero-based indexing
-                self.rowstart + nrows - 1
-                )
-            ))
+        match self.seq_nrows_display() {
+            0 => None,
+            nrows => Some(
+                self.rowstart..=(min(self.aln.nrows() - 1, self.rowstart + nrows - 1))
+            )
         }
     }
 
-    fn ncols_display(&self) -> usize {
-        (self.term_ncols - self.namewidth) as usize - 1 // one '|' char
+    fn seq_ncols_display(&self) -> usize {
+        self.term_ncols.saturating_sub(self.namewidth + 1).into() // one '|' char
     }
 
     fn seq_col_range(&self) -> Option<RangeInclusive<usize>> {
-        let ncols = self.ncols_display();
-        if ncols == 0 {
-            return None
-        } else {
-            return Some((self.colstart)..=(
-                min(
-                self.term_ncols as usize,
-                self.colstart + ncols - 1
-                )
-            ))
+        match self.seq_ncols_display() {
+            0 => None,
+            ncols => Some(
+                self.colstart..=(min(self.aln.ncols() - 1, self.colstart + ncols - 1))
+            )
         }
     }
 }
 
-fn display(view: View) {
+fn display(view: &mut View) {
     let mut io = std::io::stdout();
     enable_raw_mode().unwrap();
     execute!(io, terminal::EnterAlternateScreen).unwrap();
@@ -215,6 +235,8 @@ fn display(view: View) {
 
     draw_all(&mut io, &view);
 
+    //let mut file = std::fs::File::create("/tmp/foo.txt").unwrap();
+
     io.flush().unwrap();
     loop {
         poll(Duration::from_secs(1_000_000_000)).unwrap();
@@ -224,6 +246,32 @@ fn display(view: View) {
         if event == Event::Key(KeyCode::Esc.into()) || event == Event::Key(KeyCode::Char('q').into()) {
             break;
         }
+
+        match event {
+            Event::Key(kevent) => {
+                let (dy, dx) = match kevent {
+                    KeyEvent{code: KeyCode::Left, modifiers: event::KeyModifiers::NONE} => (0, -1),
+                    KeyEvent{code: KeyCode::Right, modifiers: event::KeyModifiers::NONE} => (0, 1),
+                    KeyEvent{code: KeyCode::Down, modifiers: event::KeyModifiers::NONE} => (1, 0),
+                    KeyEvent{code: KeyCode::Up, modifiers: event::KeyModifiers::NONE} => (-1, 0),
+                    _ => (0, 0),
+                };
+                if dy != 0 || dx != 0 {
+                    view.move_view(&mut io, dy, dx)
+                }
+            },
+            _ => ()
+        };
+
+        /*
+        file.write(
+            format!(
+        "----------------------\n{}\n{}\n{}\n{}\n{}\n{:?}\n{:?}\n",
+        view.rowstart.to_string(), view.colstart.to_string(),
+        view.term_ncols.to_string(), view.term_nrows.to_string(), view.namewidth.to_string(),
+        view.seq_row_range(), view.seq_col_range()
+        ).as_bytes()).unwrap();
+        */
     }
 
     execute!(
@@ -236,6 +284,10 @@ fn display(view: View) {
 }
 
 fn draw_all<T: Write>(io: &mut T, view: &View) {
+    execute!(
+        io,
+        terminal::Clear(ClearType::All),
+    ).unwrap();
     if view.term_ncols < 3 || view.term_nrows < 4 {
         draw_easter_egg(io);
     } else {
@@ -244,6 +296,7 @@ fn draw_all<T: Write>(io: &mut T, view: &View) {
         draw_footer(io, view);
         draw_sequences(io, view);
     }
+    io.flush().unwrap();
 }
 
 // This seems silly, but I have it because it allows me to assume a minimal
@@ -256,12 +309,14 @@ fn draw_easter_egg<T: Write>(io: &mut T) {
     ).unwrap();
 }
 
-fn draw_names<T: Write>(io: &mut T, view: &View) {    
-    for (i, (alnrow, padname)) in view.seq_row_range()
-        .zip(view.padded_names.iter()).enumerate() {
-        let termrow = (i + HEADER_LINES) as u16;
-        queue!(io, cursor::MoveTo(0, termrow)).unwrap();
-        print!("{}│", padname);
+fn draw_names<T: Write>(io: &mut T, view: &View) {
+    if let Some(range) = view.seq_row_range() {
+        for (i, (alnrow, padname)) in range
+            .zip(view.padded_names.iter()).enumerate() {
+            let termrow = (i + HEADER_LINES) as u16;
+            queue!(io, cursor::MoveTo(0, termrow)).unwrap();
+            print!("{}│", padname);
+        }
     }
 }
 
@@ -296,11 +351,20 @@ fn draw_footer<T: Write>(io: &mut T, view: &View) {
 }
 
 fn draw_sequences<T: Write>(io: &mut T, view: &View) {
-    for (i, alnrow) in view.seq_row_range().enumerate() {
+    let row_range = match view.seq_row_range() {
+        Some(n) => n,
+        None => return
+    };
+    let col_range = match view.seq_col_range() {
+        Some(n) => n,
+        None => return
+    };
+
+    for (i, alnrow) in row_range.enumerate() {
         // We have already checked this is valid ASCII in the Alignment
         // constructor.
         let seq = unsafe {
-            std::str::from_utf8_unchecked(&view.aln.seqs[alnrow][view.seq_col_range()])
+            std::str::from_utf8_unchecked(&view.aln.seqs[alnrow][col_range.clone()])
         };
         let termrow = (i + HEADER_LINES) as u16;
         queue!(
@@ -337,6 +401,6 @@ fn main() {
         Box::new(BufReader::new(std::fs::File::open(filename).unwrap()))
     };
     let aln = Alignment::new(BufReader::new(buffered_io));
-    let view = View::new(aln);
-    display(view);
+    let mut view = View::new(aln);
+    display(&mut view);
 }
