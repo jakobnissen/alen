@@ -8,7 +8,7 @@ use bio::alphabets;
 use bio::io::fasta;
 use std::path::Path;
 use std::time::Duration;
-use std::cmp::min;
+use std::cmp::{min, max};
 
 use clap;
 use unicode_segmentation::UnicodeSegmentation;
@@ -17,7 +17,7 @@ use crossterm::{
     cursor,
     event::{poll, read, Event, KeyCode},
     execute, queue,
-    style::{self, Print},
+    style::{self, Print, Stylize, Color, SetBackgroundColor, SetForegroundColor, ResetColor},
     terminal::{self, disable_raw_mode, enable_raw_mode, ClearType},
 };
 
@@ -45,6 +45,7 @@ impl Alignment {
         let mut seqs = Vec::new();
         let mut names: Vec<String> = Vec::new();
         let reader = fasta::Reader::new(file);
+        // Due to logic later, these MUST be ASCII
         let alphabet = alphabets::Alphabet::new(b"-ACMGRSVTWYHKDBNacmgrsvtwyhkdbn");
         let mut seqlength: Option<usize> = None;
         for result in reader.records() {
@@ -85,35 +86,52 @@ struct View {
     aln: Alignment
 }
 
+fn calculate_start(current: usize, displaysize: usize, n_rows_cols: usize) -> usize {
+    let last_index = n_rows_cols - 1;
+    // If we would exceed the alignment...
+    if current + displaysize > last_index + 1 {
+        // If we can display all of them, we are fixed at position 0
+        if displaysize >= n_rows_cols {
+            return 0
+        } else {
+            return n_rows_cols - displaysize
+        }
+    } else {
+        return current
+    }
+}
+
 impl View {
     fn new(aln: Alignment) -> View {
-        let (term_ncols, term_nrows) = terminal::size().unwrap();
-        let namewidth = min(30, term_ncols >> 2);
-
         let mut view = View {
             rowstart: 0,
             colstart: 0,
-            term_nrows,
-            term_ncols,
-            namewidth,
+            term_nrows: 0,
+            term_ncols: 0,
+            namewidth: 0,
             padded_names: Vec::new(),
-            aln
+            aln,
         };
-        view.update_padded_names();
-        return  view
+        view.resize();
+        return view
     }
 
     /// Resize the view to the current terminal window, but do not draw anything
     fn resize(&mut self) {
-        // TODO: Current minimum terminal size
-        // 4 rows (2 header + 1 seq + 1 footer)
-        // 3 cols (1 name + 1 | + 1 seq)
+        // Get terminal size, and set it.
+        let (term_col, term_row) = terminal::size().unwrap();
+        let (oldcol, oldrow) = (self.colstart, self.rowstart);
+        self.term_nrows = term_row;
+        self.term_ncols = term_col;
+        
+        // Calculate new starts (if you zoom out)
+        self.rowstart = calculate_start(oldrow, self.nseqs_display(), self.aln.nrows());
+        self.colstart = calculate_start(oldcol, self.ncols_display(), self.aln.ncols());
 
-        // TODO:
-        // * Check minimum size, print :( otherwise
-        // * Re-calculate row/colstart (if you zoom out)
-        // * update_padded_names
-        unimplemented!()
+        // Set namewidth and padded names
+        // TODO: Better calculation of namewidth, so it doesn't reset if you modify it
+        self.namewidth = min(30, term_col >> 2);
+        self.update_padded_names();
     }
 
     /// Update the vector of padded_names, only including the ones that
@@ -148,26 +166,37 @@ impl View {
         (self.term_nrows as usize) - (HEADER_LINES + FOOTER_LINES)
     }
 
-    fn seq_row_range(&self) -> RangeInclusive<usize> {
-        (self.rowstart)..=(
-            min(
-            self.aln.nrows() - 1, // zero-based indexing
-            self.rowstart + self.nseqs_display() - 1
-            )
-        )
+    fn seq_row_range(&self) -> Option<RangeInclusive<usize>> {
+        let nrows = self.nseqs_display();
+        if nrows == 0 {
+            return None
+        } else
+        {
+            return Some((self.rowstart)..=(
+                min(
+                self.aln.nrows() - 1, // zero-based indexing
+                self.rowstart + nrows - 1
+                )
+            ))
+        }
     }
 
     fn ncols_display(&self) -> usize {
         (self.term_ncols - self.namewidth) as usize - 1 // one '|' char
     }
 
-    fn seq_col_range(&self) -> RangeInclusive<usize> {
-        (self.colstart)..=(
-            min(
-            self.term_ncols as usize,
-            self.colstart + self.ncols_display() - 1
-            )
-        )
+    fn seq_col_range(&self) -> Option<RangeInclusive<usize>> {
+        let ncols = self.ncols_display();
+        if ncols == 0 {
+            return None
+        } else {
+            return Some((self.colstart)..=(
+                min(
+                self.term_ncols as usize,
+                self.colstart + ncols - 1
+                )
+            ))
+        }
     }
 }
 
@@ -184,14 +213,12 @@ fn display(view: View) {
         cursor::MoveTo(0, 0)
     ).unwrap();
 
-    println!("Type [Esc] or 'q' to quit.");
-    draw_names(&mut io, &view);
+    draw_all(&mut io, &view);
 
+    io.flush().unwrap();
     loop {
         poll(Duration::from_secs(1_000_000_000)).unwrap();
         let event = read().unwrap();
-
-        println!("Event::{:?}\r", event);
 
         // Break on Q or Esc
         if event == Event::Key(KeyCode::Esc.into()) || event == Event::Key(KeyCode::Char('q').into()) {
@@ -209,20 +236,33 @@ fn display(view: View) {
 }
 
 fn draw_all<T: Write>(io: &mut T, view: &View) {
-    draw_ruler(io, view);
-    draw_names(io, view);
-    draw_footer(io, view);
-    draw_sequences(io, view);
+    if view.term_ncols < 3 || view.term_nrows < 4 {
+        draw_easter_egg(io);
+    } else {
+        //draw_ruler(io, view);
+        draw_names(io, view);
+        draw_footer(io, view);
+        draw_sequences(io, view);
+    }
+}
+
+// This seems silly, but I have it because it allows me to assume a minimal
+// terminal size when drawing the regular alignment
+fn draw_easter_egg<T: Write>(io: &mut T) {
+    execute!(
+        io,
+        cursor::MoveTo(0, 0),
+        style::Print(":("),
+    ).unwrap();
 }
 
 fn draw_names<T: Write>(io: &mut T, view: &View) {    
-    for (termrow, (alnrow, padname)) in view.seq_row_range()
+    for (i, (alnrow, padname)) in view.seq_row_range()
         .zip(view.padded_names.iter()).enumerate() {
-        
-        queue!(io, cursor::MoveTo(0, (termrow + HEADER_LINES) as u16)).unwrap();
+        let termrow = (i + HEADER_LINES) as u16;
+        queue!(io, cursor::MoveTo(0, termrow)).unwrap();
         print!("{}│", padname);
     }
-    io.flush().unwrap();
 }
 
 fn draw_ruler<T: Write>(io: &mut T, view: &View) {
@@ -230,11 +270,45 @@ fn draw_ruler<T: Write>(io: &mut T, view: &View) {
 }
 
 fn draw_footer<T: Write>(io: &mut T, view: &View) {
-    unimplemented!()
+    // First we create the full footer, then we truncate, if needed
+    let mut footer = String::from(
+        "q/Esc: Quit   ←→↑↓: Move alignment   Ctrl+←: Move to end"
+    );
+    // Pad or truncate footer to match num columns
+    let nchars = footer.chars().count();
+    let ncols = view.term_ncols as usize;
+
+    if nchars > ncols {
+        footer = UnicodeSegmentation::graphemes(footer.as_str(), true)
+            .take(ncols).collect::<String>();
+    } else {
+        footer.push_str(" ".repeat(ncols - nchars).as_str())
+    }
+
+    queue!(
+        io,
+        SetBackgroundColor(Color::Grey),
+        SetForegroundColor(Color::Black),
+        cursor::MoveTo(0, (view.term_nrows - 1) as u16),
+        style::Print(footer),
+        ResetColor,
+    ).unwrap();
 }
 
 fn draw_sequences<T: Write>(io: &mut T, view: &View) {
-    unimplemented!()
+    for (i, alnrow) in view.seq_row_range().enumerate() {
+        // We have already checked this is valid ASCII in the Alignment
+        // constructor.
+        let seq = unsafe {
+            std::str::from_utf8_unchecked(&view.aln.seqs[alnrow][view.seq_col_range()])
+        };
+        let termrow = (i + HEADER_LINES) as u16;
+        queue!(
+            io,
+            cursor::MoveTo(view.namewidth + 1, termrow),
+            style::Print(seq),
+        ).unwrap();
+    }
 }
 
 fn main() {
