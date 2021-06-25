@@ -1,9 +1,9 @@
-// To do: Load in sequences to alignment format
-// To do: Figure out how to display to terminal
 // To do: Auto-detect format and sequence kind
-//
+#![allow(dead_code)]
+#![allow(unused_variables)]
 
 use std::io::{stdin, BufRead, BufReader, Write};
+use std::ops::RangeInclusive;
 use bio::alphabets;
 use bio::io::fasta;
 use std::path::Path;
@@ -20,6 +20,9 @@ use crossterm::{
     style::{self, Print},
     terminal::{self, disable_raw_mode, enable_raw_mode, ClearType},
 };
+
+const HEADER_LINES: usize = 2;
+const FOOTER_LINES: usize = 1;
 
 // TODO: Protein/DNA alignment?
 // TODO: Remove this debug
@@ -71,11 +74,12 @@ impl Alignment {
     }
 }
 
+/// A view object contains all information of what to draw to the screen
 struct View {
     rowstart: usize,
     colstart: usize,
-    nrows: u16,
-    ncols: u16,
+    term_nrows: u16, // obtained from terminal
+    term_ncols: u16, // obtained from terminal
     namewidth: u16,
     padded_names: Vec<String>,
     aln: Alignment
@@ -83,26 +87,87 @@ struct View {
 
 impl View {
     fn new(aln: Alignment) -> View {
-        let (nrows, ncols) = terminal::size().unwrap();
-        let namewidth = min(30, nrows >> 2);
-        let padded_names = View::padded_names(&aln, namewidth);
-        View {rowstart: 1, colstart: 1, nrows, ncols, namewidth, padded_names, aln}
+        let (term_ncols, term_nrows) = terminal::size().unwrap();
+        let namewidth = min(30, term_ncols >> 2);
+
+        let mut view = View {
+            rowstart: 0,
+            colstart: 0,
+            term_nrows,
+            term_ncols,
+            namewidth,
+            padded_names: Vec::new(),
+            aln
+        };
+        view.update_padded_names();
+        return  view
     }
 
-    fn padded_names(aln: &Alignment, width: u16) -> Vec<String> {
-        let mut result = Vec::new();
-        for name in aln.names.iter() {
-            let pvec = UnicodeSegmentation::graphemes(name.as_str(), true)
-                .take(width as usize).collect::<Vec<_>>();
-            let mut str = pvec.join("");
-            str.push_str(" ".repeat((width as usize) - pvec.len()).as_str());
-            result.push(str);
+    /// Resize the view to the current terminal window, but do not draw anything
+    fn resize(&mut self) {
+        // TODO: Current minimum terminal size
+        // 4 rows (2 header + 1 seq + 1 footer)
+        // 3 cols (1 name + 1 | + 1 seq)
+
+        // TODO:
+        // * Check minimum size, print :( otherwise
+        // * Re-calculate row/colstart (if you zoom out)
+        // * update_padded_names
+        unimplemented!()
+    }
+
+    /// Update the vector of padded_names, only including the ones that
+    /// will be displayed on screen.
+    /// Make sure to pad according to unicode graphemes, which I think should
+    /// correspond to text width.
+    fn update_padded_names(&mut self) {
+        let width = self.namewidth as usize;
+        if width == 0 {
+            self.padded_names.fill("".to_owned());
+            return ()
+        } else {
+            self.padded_names.clear();
         }
-        return result
+
+        // Else, we can guarantee width is at least 1
+        for name in self.aln.names[self.seq_row_range()].iter() {
+            let mut grapheme_iter = UnicodeSegmentation::graphemes(name.as_str(), true);
+            let mut strvec = (&mut grapheme_iter).take(width - 1).collect::<Vec<_>>();
+            if strvec.len() == (width - 1) {
+                strvec.push("…");
+            } else if let Some(grapheme) = grapheme_iter.next() {
+                strvec.push(grapheme)
+            }
+            let mut str = strvec.join("");
+            str.push_str(" ".repeat(width - strvec.len()).as_str());
+            self.padded_names.push(str);
+        }
     }
 
-    fn rowmax(&self) -> usize {
-        min(self.aln.nrows() - 1, self.rowstart + self.nrows as usize - 1)
+    fn nseqs_display(&self) -> usize {
+        (self.term_nrows as usize) - (HEADER_LINES + FOOTER_LINES)
+    }
+
+    fn seq_row_range(&self) -> RangeInclusive<usize> {
+        (self.rowstart)..=(
+            min(
+            self.aln.nrows() - 1, // zero-based indexing
+            self.rowstart + self.nseqs_display() - 1
+            )
+        )
+    }
+
+    fn ncols_display(&self) -> usize {
+        (self.term_ncols - self.namewidth) as usize - 1 // one '|' char
+    }
+
+    fn seq_col_range(&self) -> RangeInclusive<usize> {
+        (self.colstart)..=(
+            min(
+            self.term_ncols as usize,
+            self.colstart + self.ncols_display() - 1
+            )
+        )
     }
 }
 
@@ -120,7 +185,7 @@ fn display(view: View) {
     ).unwrap();
 
     println!("Type [Esc] or 'q' to quit.");
-    draw_names(&io, &view);
+    draw_names(&mut io, &view);
 
     loop {
         poll(Duration::from_secs(1_000_000_000)).unwrap();
@@ -143,28 +208,32 @@ fn display(view: View) {
     disable_raw_mode().unwrap();
 }
 
-fn draw_names<T: Write>(mut io: T, view: &View) {
-    //let first_tick_col = view.namewidth as u64 + 1 + (view.colstart as u64 % 10);
-    queue!(io, cursor::MoveTo(0, 0)).unwrap();
-    let mut ruler = String::new(); // ┌─┴
-    let mut counter = String::new();
-    queue!(
-            io,
-            cursor::MoveTo(0, 0),
-            Print(counter),
-            cursor::MoveTo(0, 1),
-            Print(ruler),
-    ).unwrap();
-    
-    let ruler_height = 2;
-    for (termrow, alnrow) in (view.rowstart..view.rowmax()).enumerate() {
-        queue!(io, cursor::MoveTo(0, (termrow + ruler_height) as u16)).unwrap();
-        print!("{}|", view.padded_names[alnrow]);
+fn draw_all<T: Write>(io: &mut T, view: &View) {
+    draw_ruler(io, view);
+    draw_names(io, view);
+    draw_footer(io, view);
+    draw_sequences(io, view);
+}
+
+fn draw_names<T: Write>(io: &mut T, view: &View) {    
+    for (termrow, (alnrow, padname)) in view.seq_row_range()
+        .zip(view.padded_names.iter()).enumerate() {
+        
+        queue!(io, cursor::MoveTo(0, (termrow + HEADER_LINES) as u16)).unwrap();
+        print!("{}│", padname);
     }
     io.flush().unwrap();
 }
 
-fn draw_bottom<T: Write>(mut io: T, view: View) {
+fn draw_ruler<T: Write>(io: &mut T, view: &View) {
+    unimplemented!()
+}
+
+fn draw_footer<T: Write>(io: &mut T, view: &View) {
+    unimplemented!()
+}
+
+fn draw_sequences<T: Write>(io: &mut T, view: &View) {
     unimplemented!()
 }
 
