@@ -1,6 +1,5 @@
 // To do: Auto-detect format and sequence kind
-#![allow(dead_code)]
-#![allow(unused_variables)]
+// To do: Option to upper-case
 
 use std::convert::TryInto;
 use std::io::{stdin, BufRead, BufReader, Write};
@@ -9,7 +8,7 @@ use bio::alphabets;
 use bio::io::fasta;
 use std::path::Path;
 use std::time::Duration;
-use std::cmp::{min, max};
+use std::cmp::min;
 
 use clap;
 use unicode_segmentation::UnicodeSegmentation;
@@ -18,7 +17,7 @@ use crossterm::{
     cursor,
     event::{self, poll, read, Event, KeyCode, KeyEvent},
     execute, queue,
-    style::{self, Print, Stylize, Color, SetBackgroundColor, SetForegroundColor, ResetColor},
+    style::{self, Print, Color, SetBackgroundColor, SetForegroundColor, ResetColor},
     terminal::{self, disable_raw_mode, enable_raw_mode, ClearType},
 };
 
@@ -94,7 +93,7 @@ fn calculate_start(
     n_rows_cols: usize,
 ) -> usize {
     let last_index = n_rows_cols - displaysize;
-    let moveto = (current as isize) + delta;
+    let moveto = (current as isize).saturating_add(delta);
     if moveto < 0 {
         return 0
     } else if (moveto as usize) > last_index {
@@ -115,17 +114,17 @@ impl View {
             padded_names: Vec::new(),
             aln,
         };
-        view.resize();
+        let (ncols, nrows) = terminal::size().unwrap();
+        view.resize(ncols, nrows);
         return view
     }
 
     /// Resize the view to the current terminal window, but do not draw anything
-    fn resize(&mut self) {
+    fn resize(&mut self, ncols: u16, nrows: u16) {
         // Get terminal size, and set it.
-        let (term_col, term_row) = terminal::size().unwrap();
         let (oldcol, oldrow) = (self.colstart, self.rowstart);
-        self.term_nrows = term_row;
-        self.term_ncols = term_col;
+        self.term_nrows = nrows;
+        self.term_ncols = ncols;
         
         // Calculate new starts (if you zoom out)
         self.rowstart = calculate_start(
@@ -139,7 +138,7 @@ impl View {
 
         // Set namewidth and padded names
         // TODO: Better calculation of namewidth, so it doesn't reset if you modify it
-        self.namewidth = min(30, term_col >> 2);
+        self.namewidth = min(30, ncols >> 2);
         self.update_padded_names();
     }
 
@@ -157,7 +156,7 @@ impl View {
             draw_names(io, &self);
         }
         if dx != 0 {
-            //draw_ruler(io, &self) // TODO
+            draw_ruler(io, &self)
         }
         draw_sequences(io, &self);
         io.flush().unwrap();
@@ -249,17 +248,33 @@ fn display(view: &mut View) {
 
         match event {
             Event::Key(kevent) => {
-                let (dy, dx) = match kevent {
-                    KeyEvent{code: KeyCode::Left, modifiers: event::KeyModifiers::NONE} => (0, -1),
-                    KeyEvent{code: KeyCode::Right, modifiers: event::KeyModifiers::NONE} => (0, 1),
-                    KeyEvent{code: KeyCode::Down, modifiers: event::KeyModifiers::NONE} => (1, 0),
-                    KeyEvent{code: KeyCode::Up, modifiers: event::KeyModifiers::NONE} => (-1, 0),
-                    _ => (0, 0),
+                let delta = match kevent {
+                    KeyEvent{code: KeyCode::Left, modifiers: event::KeyModifiers::NONE} => Some((0, -1)),
+                    KeyEvent{code: KeyCode::Right, modifiers: event::KeyModifiers::NONE} => Some((0, 1)),
+                    KeyEvent{code: KeyCode::Down, modifiers: event::KeyModifiers::NONE} => Some((1, 0)),
+                    KeyEvent{code: KeyCode::Up, modifiers: event::KeyModifiers::NONE} => Some((-1, 0)),
+
+                    // SHIFT: Move by 10
+                    KeyEvent{code: KeyCode::Left, modifiers: event::KeyModifiers::SHIFT} => Some((0, -10)),
+                    KeyEvent{code: KeyCode::Right, modifiers: event::KeyModifiers::SHIFT} => Some((0, 10)),
+                    KeyEvent{code: KeyCode::Down, modifiers: event::KeyModifiers::SHIFT} => Some((10, 0)),
+                    KeyEvent{code: KeyCode::Up, modifiers: event::KeyModifiers::SHIFT} => Some((-10, 0)),
+
+                    // CONTROL: Move to end
+                    KeyEvent{code: KeyCode::Left, modifiers: event::KeyModifiers::CONTROL} => Some((0, isize::MIN)),
+                    KeyEvent{code: KeyCode::Right, modifiers: event::KeyModifiers::CONTROL} => Some((0, isize::MAX)),
+                    KeyEvent{code: KeyCode::Down, modifiers: event::KeyModifiers::CONTROL} => Some((isize::MAX, 0)),
+                    KeyEvent{code: KeyCode::Up, modifiers: event::KeyModifiers::CONTROL} => Some((isize::MIN, 0)),
+                    _ => None
                 };
-                if dy != 0 || dx != 0 {
+                if let Some((dy, dx)) = delta {
                     view.move_view(&mut io, dy, dx)
                 }
             },
+            Event::Resize(ncols, nrows) => {
+                view.resize(ncols, nrows);
+                draw_all(&mut io, &view);
+            }
             _ => ()
         };
 
@@ -291,7 +306,7 @@ fn draw_all<T: Write>(io: &mut T, view: &View) {
     if view.term_ncols < 3 || view.term_nrows < 4 {
         draw_easter_egg(io);
     } else {
-        //draw_ruler(io, view);
+        draw_ruler(io, view);
         draw_names(io, view);
         draw_footer(io, view);
         draw_sequences(io, view);
@@ -310,9 +325,8 @@ fn draw_easter_egg<T: Write>(io: &mut T) {
 }
 
 fn draw_names<T: Write>(io: &mut T, view: &View) {
-    if let Some(range) = view.seq_row_range() {
-        for (i, (alnrow, padname)) in range
-            .zip(view.padded_names.iter()).enumerate() {
+    if let Some(_range) = view.seq_row_range() {
+        for (i, padname) in view.padded_names.iter().enumerate() {
             let termrow = (i + HEADER_LINES) as u16;
             queue!(io, cursor::MoveTo(0, termrow)).unwrap();
             print!("{}│", padname);
@@ -320,8 +334,47 @@ fn draw_names<T: Write>(io: &mut T, view: &View) {
     }
 }
 
+// TODO: This function is abhorrently complicated, make sure to rewrite it cleaner.
 fn draw_ruler<T: Write>(io: &mut T, view: &View) {
-    unimplemented!()
+    // Get tick positions
+    let term_range = (view.namewidth + 1)..=(view.term_ncols-1);
+    let aln_range = view.colstart..=(view.colstart+view.seq_ncols_display() - 1);
+
+    // Check they must be same length (TODO: debug statement here?)
+    let (aln_low, aln_high) = aln_range.clone().into_inner();
+    if (aln_high - aln_low) + 1 != term_range.len() {
+        panic!("{} {} {} {} {} {}", (aln_high - aln_low) + 1, term_range.len(),
+        view.colstart, view.seq_ncols_display(), view.term_ncols, view.namewidth);
+    }
+
+    // In this loop we build the strings.
+    let mut line_string = "┌".to_owned();
+    let mut num_string = " ".to_owned();
+    let mut beginning = true;
+    for alncol in aln_range {
+        // draw tick
+        if (alncol + 1) % 10 == 0 {
+            line_string.push('┴');
+            let add = (alncol + 1).to_string();
+            num_string.push_str(&add);
+            num_string.push_str(&" ".repeat(10 - add.len()));
+            beginning = false
+        } else {
+            line_string.push('─');
+            if beginning {num_string.push(' ')};
+        }
+    }
+
+    // Make sure it's not too long! The final byte is the leading space.
+    num_string.truncate(term_range.len() + 1);
+
+    queue!(
+        io,
+        cursor::MoveTo(view.namewidth, 0),
+        Print(num_string),
+        cursor::MoveTo(view.namewidth, 1),
+        Print(line_string),
+    ).unwrap();
 }
 
 fn draw_footer<T: Write>(io: &mut T, view: &View) {
