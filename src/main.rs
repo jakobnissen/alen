@@ -16,14 +16,30 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use crossterm::{
     cursor,
-    event::{self, read, Event, KeyCode, KeyEvent},
+    event::{self, Event, KeyCode, KeyEvent},
     execute, queue,
-    style::{self, Print, Color, SetBackgroundColor, SetForegroundColor, ResetColor},
-    terminal::{self, disable_raw_mode, enable_raw_mode, ClearType},
+    style::{Print, Color, SetBackgroundColor, SetForegroundColor, ResetColor},
+    terminal::{self, ClearType},
 };
 
 const HEADER_LINES: usize = 2;
 const FOOTER_LINES: usize = 1;
+
+/// Panics if not valid biosequence, else returns true (aa) or false (dna)
+fn is_dna_alphabet(seqs: &[Vec<u8>]) -> bool {
+    let dna_alphabet = Alphabet::new(b"-ACMGRSVTUWYHKDBNacmgrsvtuwyhkdbn");
+    let aa_alphabet = Alphabet::new(b"*-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz");
+
+    let mut valid_dna = true;
+    for seq in seqs {
+        valid_dna &= dna_alphabet.is_word(seq);
+        // DNA alphabet is a subset of AA alphabet, so we panic if it can't even be AA
+        if !aa_alphabet.is_word(seq) {
+            panic!("Cannot interpret sequence as amino acids") // TODO: Better error
+        }
+    }
+    valid_dna
+}
 
 fn get_color_background_dna(byte: u8) -> Option<Color> {
     match byte {
@@ -38,17 +54,17 @@ fn get_color_background_dna(byte: u8) -> Option<Color> {
 fn get_color_background_aa(byte: u8) -> Option<Color> {
     match byte {
         // Negative (reds)
-        b'e' | b'E' => Some(Color::AnsiValue(197)),
-        b'd' | b'D' => Some(Color::AnsiValue(199)),
+        b'e' | b'E' => Some(Color::AnsiValue(198)),
+        b'd' | b'D' => Some(Color::AnsiValue(161)),
 
         // Positive (blues)
-        b'r' | b'R' => Some(Color::AnsiValue(25)),
+        b'r' | b'R' => Some(Color::AnsiValue(39)),
         b'k' | b'K' => Some(Color::AnsiValue(26)),
-        b'h' | b'H' => Some(Color::AnsiValue(27)),
+        b'h' | b'H' => Some(Color::AnsiValue(32)),
 
         // Aromatic (yellows)
         b'f' | b'F' => Some(Color::AnsiValue(184)),
-        b'w' | b'W' => Some(Color::AnsiValue(185)),
+        b'w' | b'W' => Some(Color::AnsiValue(228)),
         b'y' | b'Y' => Some(Color::AnsiValue(186)),
 
         // Aliphatic (greys)
@@ -56,14 +72,15 @@ fn get_color_background_aa(byte: u8) -> Option<Color> {
         b'v' | b'V' => Some(Color::AnsiValue(246)),
         b'l' | b'L' => Some(Color::AnsiValue(248)),
         b'i' | b'I' => Some(Color::AnsiValue(250)),
-        b'm' | b'M' => Some(Color::AnsiValue(242)),
+        b'm' | b'M' => Some(Color::AnsiValue(252)),
 
         // Neutral (greens)
-        b's' | b'S' => Some(Color::AnsiValue(76)),
-        b't' | b'T' => Some(Color::AnsiValue(77)),
-        b'n' | b'N' => Some(Color::AnsiValue(78)),
-        b'q' | b'Q' => Some(Color::AnsiValue(112)),
-        b'c' | b'C' => Some(Color::AnsiValue(113)),
+        b's' | b'S' => Some(Color::AnsiValue(40)),
+        b't' | b'T' => Some(Color::AnsiValue(42)),
+        b'n' | b'N' => Some(Color::AnsiValue(76)),
+        b'q' | b'Q' => Some(Color::AnsiValue(78)),
+
+        b'c' | b'C' => Some(Color::AnsiValue(112)),
         b'p' | b'P' => Some(Color::AnsiValue(114)),
         b'g' | b'G' => Some(Color::AnsiValue(149)),
         _ => None,
@@ -128,22 +145,6 @@ impl Alignment {
     }
 }
 
-/// Panics if not valid biosequence, else returns true(aa) or false(dna)
-fn is_dna_alphabet(seqs: &[Vec<u8>]) -> bool {
-    let dna_alphabet = Alphabet::new(b"-ACMGRSVTUWYHKDBNacmgrsvtuwyhkdbn");
-    let aa_alphabet = Alphabet::new(b"*-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz");
-
-    let mut valid_dna = true;
-    for seq in seqs {
-        valid_dna &= dna_alphabet.is_word(seq);
-        // DNA alphabet is a subset of AA alphabet, so we panic if it can't even be AA
-        if !aa_alphabet.is_word(seq) {
-            panic!("Cannot interpret sequence as amino acids") // TODO: Better error
-        }
-    }
-    valid_dna
-}
-
 /// A view object contains all information of what to draw to the screen
 struct View {
     rowstart: usize,
@@ -152,23 +153,6 @@ struct View {
     term_ncols: u16, // obtained from terminal
     namewidth: u16,
     aln: Alignment
-}
-
-fn calculate_start(
-    current: usize,
-    delta: isize,
-    displaysize: usize,
-    n_rows_cols: usize,
-) -> usize {
-    let last_index = n_rows_cols.saturating_sub(displaysize);
-    let moveto = (current as isize).saturating_add(delta);
-    if moveto < 0 {
-        0
-    } else if (moveto as usize) > last_index {
-        last_index
-    } else {
-        moveto.try_into().unwrap()
-    }
 }
 
 impl View {
@@ -211,11 +195,11 @@ impl View {
     fn move_view<T: Write>(&mut self, io: &mut T, dy: isize, dx: isize) {
         self.rowstart = calculate_start(
             self.rowstart, dy, 
-            self.term_nrows as usize, self.aln.nrows()
+            self.seq_ncols_display() as usize, self.aln.nrows()
         );
         self.colstart = calculate_start(
             self.colstart, dx, 
-            self.term_ncols as usize, self.aln.ncols()
+            self.seq_ncols_display() as usize, self.aln.ncols()
         );
         if dy != 0 {
             draw_names(io, self);
@@ -263,19 +247,36 @@ impl View {
     }
 }
 
+fn calculate_start(
+    current: usize,
+    delta: isize,
+    displaysize: usize,
+    n_rows_cols: usize,
+) -> usize {
+    let last_index = n_rows_cols.saturating_sub(displaysize);
+    let moveto = (current as isize).saturating_add(delta);
+    if moveto < 0 {
+        0
+    } else if (moveto as usize) > last_index {
+        last_index
+    } else {
+        moveto.try_into().unwrap()
+    }
+}
+
 fn display(view: &mut View) {
     let mut io = std::io::stdout();
-    enable_raw_mode().unwrap();
+    terminal::enable_raw_mode().unwrap();
     execute!(io,
         terminal::EnterAlternateScreen,
         cursor::Hide,
     ).unwrap();
 
     draw_all(&mut io, view);
-
     io.flush().unwrap();
+
     loop {
-        let event = read().unwrap();
+        let event = event::read().unwrap();
 
         // Break on Q or Esc
         if event == Event::Key(KeyCode::Esc.into()) || event == Event::Key(KeyCode::Char('q').into()) {
@@ -307,12 +308,12 @@ fn display(view: &mut View) {
                     view.move_view(&mut io, dy, dx)
                 };
                 let name_move = match kevent {
-                    KeyEvent{code: KeyCode::Char(','), modifiers: event::KeyModifiers::NONE} => -1,
-                    KeyEvent{code: KeyCode::Char('.'), modifiers: event::KeyModifiers::NONE} => 1,
-                    _ => 0
+                    KeyEvent{code: KeyCode::Char(','), modifiers: event::KeyModifiers::NONE} => Some(-1),
+                    KeyEvent{code: KeyCode::Char('.'), modifiers: event::KeyModifiers::NONE} => Some(1),
+                    _ => None
                 };
-                if name_move != 0 {
-                    view.resize_names(name_move);
+                if let Some(delta) = name_move {
+                    view.resize_names(delta);
                     draw_all(&mut io, view);
                 }
 
@@ -327,21 +328,28 @@ fn display(view: &mut View) {
 
     execute!(
         io,
-        style::ResetColor,
+        ResetColor,
         cursor::Show,
         terminal::LeaveAlternateScreen
     ).unwrap();
-    disable_raw_mode().unwrap();
+    terminal::disable_raw_mode().unwrap();
 }
 
 fn draw_all<T: Write>(io: &mut T, view: &View) {
     execute!(
         io,
-        style::ResetColor,
+        ResetColor,
         terminal::Clear(ClearType::All),
     ).unwrap();
-    if view.term_ncols < 3 || view.term_nrows < 4 {
-        draw_easter_egg(io);
+
+    if view.term_ncols < 2 || view.term_nrows < 4 {
+        // This seems silly, but I have it because it allows me to assume a minimal
+        // terminal size when drawing the regular alignment
+        execute!(
+            io,
+            cursor::MoveTo(0, 0),
+            Print(":("),
+        ).unwrap();
     } else {
         draw_ruler(io, view);
         draw_names(io, view);
@@ -351,15 +359,6 @@ fn draw_all<T: Write>(io: &mut T, view: &View) {
     io.flush().unwrap();
 }
 
-// This seems silly, but I have it because it allows me to assume a minimal
-// terminal size when drawing the regular alignment
-fn draw_easter_egg<T: Write>(io: &mut T) {
-    execute!(
-        io,
-        cursor::MoveTo(0, 0),
-        style::Print(":("),
-    ).unwrap();
-}
 
 fn draw_names<T: Write>(io: &mut T, view: &View) {
     if let Some(range) = view.seq_row_range() {
@@ -449,7 +448,7 @@ fn draw_footer<T: Write>(io: &mut T, view: &View) {
         SetBackgroundColor(Color::Grey),
         SetForegroundColor(Color::Black),
         cursor::MoveTo(0, (view.term_nrows - 1) as u16),
-        style::Print(footer),
+        Print(footer),
         ResetColor,
     ).unwrap();
 }
