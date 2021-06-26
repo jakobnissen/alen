@@ -1,5 +1,9 @@
 // To do: Auto-detect format and sequence kind
-// To do: Option to upper-case
+// To do: Option to upper-case input
+// To do: Make stdin work.
+// To do: Colors (do this before AA)
+// To do: Better error handling in general
+// To do: Factorize to files
 
 use std::convert::TryInto;
 use std::io::{stdin, BufRead, BufReader, Write};
@@ -8,7 +12,7 @@ use bio::alphabets;
 use bio::io::fasta;
 use std::path::Path;
 use std::time::Duration;
-use std::cmp::min;
+use std::cmp::{min, max};
 
 use clap;
 use unicode_segmentation::UnicodeSegmentation;
@@ -162,6 +166,13 @@ impl View {
         io.flush().unwrap();
     }
 
+    fn resize_names(&mut self, delta: isize) {
+        let mut namewidth = (self.namewidth as isize) + delta;
+        namewidth = min(max(0, namewidth), (self.term_ncols as isize).saturating_sub(2));
+        self.namewidth = namewidth.try_into().unwrap();
+        self.update_padded_names();
+    }
+
     /// Update the vector of padded_names, only including the ones that
     /// will be displayed on screen.
     /// Make sure to pad according to unicode graphemes, which I think should
@@ -269,7 +280,17 @@ fn display(view: &mut View) {
                 };
                 if let Some((dy, dx)) = delta {
                     view.move_view(&mut io, dy, dx)
+                };
+                let name_move = match kevent {
+                    KeyEvent{code: KeyCode::Char(','), modifiers: event::KeyModifiers::NONE} => -1,
+                    KeyEvent{code: KeyCode::Char('.'), modifiers: event::KeyModifiers::NONE} => 1,
+                    _ => 0
+                };
+                if name_move != 0 {
+                    view.resize_names(name_move);
+                    draw_all(&mut io, &view);
                 }
+
             },
             Event::Resize(ncols, nrows) => {
                 view.resize(ncols, nrows);
@@ -380,7 +401,7 @@ fn draw_ruler<T: Write>(io: &mut T, view: &View) {
 fn draw_footer<T: Write>(io: &mut T, view: &View) {
     // First we create the full footer, then we truncate, if needed
     let mut footer = String::from(
-        "q/Esc: Quit   ←→↑↓: Move alignment   Ctrl+←: Move to end"
+        "q/Esc: Quit   ←/→/↑/↓ + None/Shift/Ctrl: Move alignment   ./,: Move names"
     );
     // Pad or truncate footer to match num columns
     let nchars = footer.chars().count();
