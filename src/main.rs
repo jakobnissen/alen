@@ -495,10 +495,10 @@ fn draw_sequences<T: Write>(io: &mut T, view: &View) {
 }
 
 fn main() {
-    let args = clap::App::new("alen")
+    let args = clap::App::new("Alen")
         .version("0.1")
         .author("Jakob Nybo Nissen <jakobnybonissen@gmail.com>")
-        .about("Simple alignment viewer")
+        .about("Simple terminal alignment viewer")
         .arg(clap::Arg::with_name("alignment")
             .help("Input alignment in FASTA format (- for stdin)")
             .takes_value(true)
