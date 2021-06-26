@@ -1,13 +1,12 @@
-// To do: Auto-detect format and sequence kind
 // To do: Make stdin work on MacOS
-// To do: Colors for AA
 // To do: Better error handling in general
 // To do: Factorize to files
+// To do: More formats?
 
 use std::convert::TryInto;
 use std::io::{stdin, BufRead, BufReader, Write};
 use std::ops::RangeInclusive;
-use bio::alphabets;
+use bio::alphabets::Alphabet;
 use bio::io::fasta;
 use std::path::Path;
 use std::cmp::{min, max};
@@ -26,13 +25,48 @@ use crossterm::{
 const HEADER_LINES: usize = 2;
 const FOOTER_LINES: usize = 1;
 
-fn get_color_background(byte: u8) -> Option<Color> {
+fn get_color_background_dna(byte: u8) -> Option<Color> {
     match byte {
         b'a' | b'A' => Some(Color::AnsiValue(228)), // yellow
         b'c' | b'C' => Some(Color::AnsiValue(77)),  // green
         b'g' | b'G' => Some(Color::AnsiValue(39)),  // blue
         b't' | b'T' | b'u' | b'U' => Some(Color::AnsiValue(168)),  // pink
         _ => None
+    }
+}
+
+fn get_color_background_aa(byte: u8) -> Option<Color> {
+    match byte {
+        // Negative (reds)
+        b'e' | b'E' => Some(Color::AnsiValue(197)),
+        b'd' | b'D' => Some(Color::AnsiValue(199)),
+
+        // Positive (blues)
+        b'r' | b'R' => Some(Color::AnsiValue(25)),
+        b'k' | b'K' => Some(Color::AnsiValue(26)),
+        b'h' | b'H' => Some(Color::AnsiValue(27)),
+
+        // Aromatic (yellows)
+        b'f' | b'F' => Some(Color::AnsiValue(184)),
+        b'w' | b'W' => Some(Color::AnsiValue(185)),
+        b'y' | b'Y' => Some(Color::AnsiValue(186)),
+
+        // Aliphatic (greys)
+        b'a' | b'A' => Some(Color::AnsiValue(244)),
+        b'v' | b'V' => Some(Color::AnsiValue(246)),
+        b'l' | b'L' => Some(Color::AnsiValue(248)),
+        b'i' | b'I' => Some(Color::AnsiValue(250)),
+        b'm' | b'M' => Some(Color::AnsiValue(242)),
+
+        // Neutral (greens)
+        b's' | b'S' => Some(Color::AnsiValue(76)),
+        b't' | b'T' => Some(Color::AnsiValue(77)),
+        b'n' | b'N' => Some(Color::AnsiValue(78)),
+        b'q' | b'Q' => Some(Color::AnsiValue(112)),
+        b'c' | b'C' => Some(Color::AnsiValue(113)),
+        b'p' | b'P' => Some(Color::AnsiValue(114)),
+        b'g' | b'G' => Some(Color::AnsiValue(149)),
+        _ => None,
     }
 }
 
@@ -43,6 +77,7 @@ struct Alignment {
     // TODO: Make graphemes vec vec str?
     graphemes: Vec<Vec<String>>,
     seqs: Vec<Vec<u8>>,
+    is_aa: bool
 }
 
 impl Alignment {
@@ -58,15 +93,10 @@ impl Alignment {
         let mut seqs = Vec::new();
         let mut graphemes: Vec<Vec<String>> = Vec::new();
         let reader = fasta::Reader::new(file);
-        // Due to logic later, these MUST be ASCII
-        let alphabet = alphabets::Alphabet::new(b"-ACMGRSVTUWYHKDBNacmgrsvtuwyhkdbn");
         let mut seqlength: Option<usize> = None;
         for result in reader.records() {
             // TODO: Better error message - file nume and record number, perhaps
             let record = result.expect("Error during FASTA parsing");
-            if !alphabet.is_word(record.seq()) {
-                panic!("Error: Sequence cannot be understood as DNA") // TODO: More precise error
-            }
             let seq = record.seq().iter()
                 .map(|&byte| {
                     // if uppercase, convert to char, uppercase, back to u8.
@@ -89,12 +119,31 @@ impl Alignment {
             seqs.push(seq);
             graphemes.push(UnicodeSegmentation::graphemes(record.id(), true).map(|s| s.to_owned()).collect());
         }
+
+        let is_aa = !is_dna_alphabet(&seqs);
+
         // TODO: Warn if two headers are identical
         if seqlength.map_or(true, |i| i < 1) {
             panic!("Error: Empty alignment") // TODO: More precise error
         }
-        Alignment{graphemes, seqs}
+        Alignment{graphemes, seqs, is_aa}
     }
+}
+
+/// Panics if not valid biosequence, else returns true(aa) or false(dna)
+fn is_dna_alphabet(seqs: &Vec<Vec<u8>>) -> bool {
+    let dna_alphabet = Alphabet::new(b"-ACMGRSVTUWYHKDBNacmgrsvtuwyhkdbn");
+    let aa_alphabet = Alphabet::new(b"*-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz");
+
+    let mut valid_dna = true;
+    for seq in seqs {
+        valid_dna &= dna_alphabet.is_word(seq);
+        // DNA alphabet is a subset of AA alphabet, so we panic if it can't even be AA
+        if !aa_alphabet.is_word(seq) {
+            panic!("Cannot interpret sequence as amino acids") // TODO: Better error
+        }
+    }
+    return valid_dna
 }
 
 /// A view object contains all information of what to draw to the screen
@@ -384,7 +433,7 @@ fn draw_ruler<T: Write>(io: &mut T, view: &View) {
 fn draw_footer<T: Write>(io: &mut T, view: &View) {
     // First we create the full footer, then we truncate, if needed
     let mut footer = String::from(
-        "q/Esc: Quit   ←/→/↑/↓ + None/Shift/Ctrl: Move alignment   ./,: Move names"
+        "q/Esc: Quit   ←/→/↑/↓ + None/Shift/Ctrl: Move alignment   ./,: Adjust names"
     );
     // Pad or truncate footer to match num columns
     let nchars = footer.chars().count();
@@ -425,7 +474,11 @@ fn draw_sequences<T: Write>(io: &mut T, view: &View) {
         ).unwrap();
         for col in col_range.clone() {
             let byte = view.aln.seqs[alnrow][col];
-            let color = get_color_background(byte);
+            let color = if view.aln.is_aa {
+                get_color_background_aa(byte)
+            } else {
+                get_color_background_dna(byte)
+            };
             match color {
                 Some(clr) => queue!(
                     io,
