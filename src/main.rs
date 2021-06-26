@@ -6,12 +6,12 @@
 use std::convert::TryInto;
 use std::io::{stdin, BufRead, BufReader, Write};
 use std::ops::RangeInclusive;
-use bio::alphabets::Alphabet;
-use bio::io::fasta;
 use std::path::Path;
 use std::cmp::{min, max};
 
-use clap;
+use bio::alphabets::Alphabet;
+use bio::io::fasta;
+
 use unicode_segmentation::UnicodeSegmentation;
 
 use crossterm::{
@@ -70,12 +70,10 @@ fn get_color_background_aa(byte: u8) -> Option<Color> {
     }
 }
 
-// TODO: Protein/DNA alignment?
-// TODO: Remove this debug
-#[derive(Debug)]
 struct Alignment {
     // TODO: Make graphemes vec vec str?
     graphemes: Vec<Vec<String>>,
+    longest_name: usize,
     seqs: Vec<Vec<u8>>,
     is_aa: bool
 }
@@ -122,16 +120,16 @@ impl Alignment {
 
         let is_aa = !is_dna_alphabet(&seqs);
 
-        // TODO: Warn if two headers are identical
         if seqlength.map_or(true, |i| i < 1) {
             panic!("Error: Empty alignment") // TODO: More precise error
         }
-        Alignment{graphemes, seqs, is_aa}
+        let longest_name = graphemes.iter().map(|v| v.len()).max().unwrap();
+        Alignment{graphemes, longest_name, seqs, is_aa}
     }
 }
 
 /// Panics if not valid biosequence, else returns true(aa) or false(dna)
-fn is_dna_alphabet(seqs: &Vec<Vec<u8>>) -> bool {
+fn is_dna_alphabet(seqs: &[Vec<u8>]) -> bool {
     let dna_alphabet = Alphabet::new(b"-ACMGRSVTUWYHKDBNacmgrsvtuwyhkdbn");
     let aa_alphabet = Alphabet::new(b"*-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz");
 
@@ -143,7 +141,7 @@ fn is_dna_alphabet(seqs: &Vec<Vec<u8>>) -> bool {
             panic!("Cannot interpret sequence as amino acids") // TODO: Better error
         }
     }
-    return valid_dna
+    valid_dna
 }
 
 /// A view object contains all information of what to draw to the screen
@@ -165,11 +163,11 @@ fn calculate_start(
     let last_index = n_rows_cols.saturating_sub(displaysize);
     let moveto = (current as isize).saturating_add(delta);
     if moveto < 0 {
-        return 0
+        0
     } else if (moveto as usize) > last_index {
-        return last_index
+        last_index
     } else {
-        return moveto.try_into().unwrap()
+        moveto.try_into().unwrap()
     }
 }
 
@@ -185,7 +183,7 @@ impl View {
         };
         let (ncols, nrows) = terminal::size().unwrap();
         view.resize(ncols, nrows);
-        return view
+        view
     }
 
     /// Resize the view to the current terminal window, but do not draw anything
@@ -220,12 +218,12 @@ impl View {
             self.term_ncols as usize, self.aln.ncols()
         );
         if dy != 0 {
-            draw_names(io, &self);
+            draw_names(io, self);
         }
         if dx != 0 {
-            draw_ruler(io, &self)
+            draw_ruler(io, self)
         }
-        draw_sequences(io, &self);
+        draw_sequences(io, self);
         io.flush().unwrap();
     }
 
@@ -233,8 +231,8 @@ impl View {
         let mut namewidth = (self.namewidth as isize) + delta;
         namewidth = max(0, namewidth); // not negative
         namewidth = min(namewidth, (self.term_ncols as isize).saturating_sub(2)); // do not exceed bounds
-        // do not exceed longest name (TODO: CACHE THIS MAX?)
-        namewidth = min(namewidth, self.aln.graphemes.iter().map(|g| g.len()).max().unwrap() as isize);
+        // do not exceed longest name shown on screen
+        namewidth = min(namewidth, self.aln.longest_name as isize);
         self.namewidth = namewidth.try_into().unwrap();
     }
 
@@ -273,7 +271,7 @@ fn display(view: &mut View) {
         cursor::Hide,
     ).unwrap();
 
-    draw_all(&mut io, &view);
+    draw_all(&mut io, view);
 
     io.flush().unwrap();
     loop {
@@ -315,13 +313,13 @@ fn display(view: &mut View) {
                 };
                 if name_move != 0 {
                     view.resize_names(name_move);
-                    draw_all(&mut io, &view);
+                    draw_all(&mut io, view);
                 }
 
             },
             Event::Resize(ncols, nrows) => {
                 view.resize(ncols, nrows);
-                draw_all(&mut io, &view);
+                draw_all(&mut io, view);
             }
             _ => ()
         };
