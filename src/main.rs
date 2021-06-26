@@ -1,6 +1,6 @@
 // To do: Auto-detect format and sequence kind
-// To do: Make stdin work.
-// To do: Colors (do this before AA)
+// To do: Make stdin work on MacOS
+// To do: Colors for AA
 // To do: Better error handling in general
 // To do: Factorize to files
 
@@ -10,7 +10,6 @@ use std::ops::RangeInclusive;
 use bio::alphabets;
 use bio::io::fasta;
 use std::path::Path;
-use std::time::Duration;
 use std::cmp::{min, max};
 
 use clap;
@@ -18,7 +17,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use crossterm::{
     cursor,
-    event::{self, poll, read, Event, KeyCode, KeyEvent},
+    event::{self, read, Event, KeyCode, KeyEvent},
     execute, queue,
     style::{self, Print, Color, SetBackgroundColor, SetForegroundColor, ResetColor},
     terminal::{self, disable_raw_mode, enable_raw_mode, ClearType},
@@ -26,6 +25,16 @@ use crossterm::{
 
 const HEADER_LINES: usize = 2;
 const FOOTER_LINES: usize = 1;
+
+fn get_color_background(byte: u8) -> Option<Color> {
+    match byte {
+        b'a' | b'A' => Some(Color::AnsiValue(228)), // yellow
+        b'c' | b'C' => Some(Color::AnsiValue(77)),  // green
+        b'g' | b'G' => Some(Color::AnsiValue(39)),  // blue
+        b't' | b'T' | b'u' | b'U' => Some(Color::AnsiValue(168)),  // pink
+        _ => None
+    }
+}
 
 // TODO: Protein/DNA alignment?
 // TODO: Remove this debug
@@ -50,7 +59,7 @@ impl Alignment {
         let mut graphemes: Vec<Vec<String>> = Vec::new();
         let reader = fasta::Reader::new(file);
         // Due to logic later, these MUST be ASCII
-        let alphabet = alphabets::Alphabet::new(b"-ACMGRSVTWYHKDBNacmgrsvtwyhkdbn");
+        let alphabet = alphabets::Alphabet::new(b"-ACMGRSVTUWYHKDBNacmgrsvtuwyhkdbn");
         let mut seqlength: Option<usize> = None;
         for result in reader.records() {
             // TODO: Better error message - file nume and record number, perhaps
@@ -210,23 +219,15 @@ impl View {
 fn display(view: &mut View) {
     let mut io = std::io::stdout();
     enable_raw_mode().unwrap();
-    execute!(io, terminal::EnterAlternateScreen).unwrap();
-    
-    queue!(
-        io,
-        style::ResetColor,
-        terminal::Clear(ClearType::All),
+    execute!(io,
+        terminal::EnterAlternateScreen,
         cursor::Hide,
-        cursor::MoveTo(0, 0)
     ).unwrap();
 
     draw_all(&mut io, &view);
 
-    //let mut file = std::fs::File::create("/tmp/foo.txt").unwrap();
-
     io.flush().unwrap();
     loop {
-        poll(Duration::from_secs(1_000_000_000)).unwrap();
         let event = read().unwrap();
 
         // Break on Q or Esc
@@ -275,16 +276,6 @@ fn display(view: &mut View) {
             }
             _ => ()
         };
-
-        /*
-        file.write(
-            format!(
-        "----------------------\n{}\n{}\n{}\n{}\n{}\n{:?}\n{:?}\n",
-        view.rowstart.to_string(), view.colstart.to_string(),
-        view.term_ncols.to_string(), view.term_nrows.to_string(), view.namewidth.to_string(),
-        view.seq_row_range(), view.seq_col_range()
-        ).as_bytes()).unwrap();
-        */
     }
 
     execute!(
@@ -299,6 +290,7 @@ fn display(view: &mut View) {
 fn draw_all<T: Write>(io: &mut T, view: &View) {
     execute!(
         io,
+        style::ResetColor,
         terminal::Clear(ClearType::All),
     ).unwrap();
     if view.term_ncols < 3 || view.term_nrows < 4 {
@@ -426,18 +418,30 @@ fn draw_sequences<T: Write>(io: &mut T, view: &View) {
     };
 
     for (i, alnrow) in row_range.enumerate() {
-        // We have already checked this is valid ASCII in the Alignment
-        // constructor.
-        let seq = unsafe {
-            std::str::from_utf8_unchecked(&view.aln.seqs[alnrow][col_range.clone()])
-        };
         let termrow = (i + HEADER_LINES) as u16;
         queue!(
             io,
             cursor::MoveTo(view.namewidth + 1, termrow),
-            style::Print(seq),
         ).unwrap();
+        for col in col_range.clone() {
+            let byte = view.aln.seqs[alnrow][col];
+            let color = get_color_background(byte);
+            match color {
+                Some(clr) => queue!(
+                    io,
+                    SetForegroundColor(Color::Black),
+                    SetBackgroundColor(clr),
+                ).unwrap(),
+                None => queue!(io, ResetColor).unwrap(),
+            };
+            queue!(io, Print(byte as char)).unwrap();
+        }
     }
+
+    queue!(
+        io,
+        ResetColor,
+    ).unwrap();
 }
 
 fn main() {
