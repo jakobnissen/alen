@@ -1,5 +1,4 @@
 // To do: Auto-detect format and sequence kind
-// To do: Option to upper-case input
 // To do: Make stdin work.
 // To do: Colors (do this before AA)
 // To do: Better error handling in general
@@ -32,22 +31,23 @@ const FOOTER_LINES: usize = 1;
 // TODO: Remove this debug
 #[derive(Debug)]
 struct Alignment {
-    names: Vec<String>,
+    // TODO: Make graphemes vec vec str?
+    graphemes: Vec<Vec<String>>,
     seqs: Vec<Vec<u8>>,
 }
 
 impl Alignment {
     fn nrows(&self) -> usize {
-        self.names.len()
+        self.graphemes.len()
     }
 
     fn ncols(&self) -> usize {
         self.seqs[0].len()
     }
 
-    fn new<T: BufRead>(file: T) -> Alignment {
+    fn new<T: BufRead>(file: T, uppercase: bool) -> Alignment {
         let mut seqs = Vec::new();
-        let mut names: Vec<String> = Vec::new();
+        let mut graphemes: Vec<Vec<String>> = Vec::new();
         let reader = fasta::Reader::new(file);
         // Due to logic later, these MUST be ASCII
         let alphabet = alphabets::Alphabet::new(b"-ACMGRSVTWYHKDBNacmgrsvtwyhkdbn");
@@ -55,10 +55,19 @@ impl Alignment {
         for result in reader.records() {
             // TODO: Better error message - file nume and record number, perhaps
             let record = result.expect("Error during FASTA parsing");
-            let seq: Vec<u8> = record.seq().into();
-            if !alphabet.is_word(&seq) {
+            if !alphabet.is_word(record.seq()) {
                 panic!("Error: Sequence cannot be understood as DNA") // TODO: More precise error
             }
+            let seq = record.seq().iter()
+                .map(|&byte| {
+                    // if uppercase, convert to char, uppercase, back to u8.
+                    // we already check the alphabet, so we can be very lax about safety
+                    if uppercase {
+                        (byte as char).to_uppercase().next().unwrap() as u8
+                    } else {
+                        byte
+                    }
+                }).collect::<Vec<_>>();
 
             // Check identical sequence lengths
             if let Some(len) = seqlength {
@@ -69,13 +78,13 @@ impl Alignment {
                 seqlength = Some(seq.len())
             }
             seqs.push(seq);
-            names.push(record.id().to_owned());
+            graphemes.push(UnicodeSegmentation::graphemes(record.id(), true).map(|s| s.to_owned()).collect());
         }
         // TODO: Warn if two headers are identical
         if seqlength.map_or(true, |i| i < 1) {
             panic!("Error: Empty alignment") // TODO: More precise error
         }
-        Alignment{names, seqs}
+        Alignment{graphemes, seqs}
     }
 }
 
@@ -86,7 +95,6 @@ struct View {
     term_nrows: u16, // obtained from terminal
     term_ncols: u16, // obtained from terminal
     namewidth: u16,
-    padded_names: Vec<String>,
     aln: Alignment
 }
 
@@ -96,7 +104,7 @@ fn calculate_start(
     displaysize: usize,
     n_rows_cols: usize,
 ) -> usize {
-    let last_index = n_rows_cols - displaysize;
+    let last_index = n_rows_cols.saturating_sub(displaysize);
     let moveto = (current as isize).saturating_add(delta);
     if moveto < 0 {
         return 0
@@ -115,7 +123,6 @@ impl View {
             term_nrows: 0,
             term_ncols: 0,
             namewidth: 0,
-            padded_names: Vec::new(),
             aln,
         };
         let (ncols, nrows) = terminal::size().unwrap();
@@ -142,8 +149,7 @@ impl View {
 
         // Set namewidth and padded names
         // TODO: Better calculation of namewidth, so it doesn't reset if you modify it
-        self.namewidth = min(30, ncols >> 2);
-        self.update_padded_names();
+        self.resize_names(min(30, (ncols >> 2) as isize));
     }
 
     fn move_view<T: Write>(&mut self, io: &mut T, dy: isize, dx: isize) {
@@ -156,7 +162,6 @@ impl View {
             self.term_ncols as usize, self.aln.ncols()
         );
         if dy != 0 {
-            self.update_padded_names();
             draw_names(io, &self);
         }
         if dx != 0 {
@@ -168,39 +173,11 @@ impl View {
 
     fn resize_names(&mut self, delta: isize) {
         let mut namewidth = (self.namewidth as isize) + delta;
-        namewidth = min(max(0, namewidth), (self.term_ncols as isize).saturating_sub(2));
+        namewidth = max(0, namewidth); // not negative
+        namewidth = min(namewidth, (self.term_ncols as isize).saturating_sub(2)); // do not exceed bounds
+        // do not exceed longest name (TODO: CACHE THIS MAX?)
+        namewidth = min(namewidth, self.aln.graphemes.iter().map(|g| g.len()).max().unwrap() as isize);
         self.namewidth = namewidth.try_into().unwrap();
-        self.update_padded_names();
-    }
-
-    /// Update the vector of padded_names, only including the ones that
-    /// will be displayed on screen.
-    /// Make sure to pad according to unicode graphemes, which I think should
-    /// correspond to text width.
-    fn update_padded_names(&mut self) {
-        let width = self.namewidth as usize;
-        if width == 0 {
-            self.padded_names.fill("".to_owned());
-            return ()
-        } else {
-            self.padded_names.clear();
-        }
-
-        // Else, we can guarantee width is at least 1
-        if let Some(range) = self.seq_row_range() {
-            for name in self.aln.names[range].iter() {
-                let mut grapheme_iter = UnicodeSegmentation::graphemes(name.as_str(), true);
-                let mut strvec = (&mut grapheme_iter).take(width - 1).collect::<Vec<_>>();
-                if strvec.len() == (width - 1) {
-                    strvec.push("…");
-                } else if let Some(grapheme) = grapheme_iter.next() {
-                    strvec.push(grapheme)
-                }
-                let mut str = strvec.join("");
-                str.push_str(" ".repeat(width - strvec.len()).as_str());
-                self.padded_names.push(str);
-            }
-        }
     }
 
     fn seq_nrows_display(&self) -> usize {
@@ -346,11 +323,28 @@ fn draw_easter_egg<T: Write>(io: &mut T) {
 }
 
 fn draw_names<T: Write>(io: &mut T, view: &View) {
-    if let Some(_range) = view.seq_row_range() {
-        for (i, padname) in view.padded_names.iter().enumerate() {
+    if let Some(range) = view.seq_row_range() {
+        for (i, nameindex) in range.into_iter().enumerate() {
             let termrow = (i + HEADER_LINES) as u16;
-            queue!(io, cursor::MoveTo(0, termrow)).unwrap();
-            print!("{}│", padname);
+            let name = if view.namewidth == 0 {
+                "".to_owned()
+            } else {
+                let graphemes = &view.aln.graphemes[nameindex];
+                let elide = graphemes.len() > view.namewidth as usize;
+                let namelen = min(graphemes.len(), view.namewidth as usize - elide as usize);
+                let mut name = graphemes[0..namelen].join("");
+                if elide {
+                    name.push('…')
+                }
+                name
+            };
+            queue!(
+                io,
+                cursor::MoveTo(0, termrow),
+                Print(name),
+                cursor::MoveTo(view.namewidth, termrow),
+                Print('│'),
+            ).unwrap();
         }
     }
 }
@@ -363,10 +357,7 @@ fn draw_ruler<T: Write>(io: &mut T, view: &View) {
 
     // Check they must be same length (TODO: debug statement here?)
     let (aln_low, aln_high) = aln_range.clone().into_inner();
-    if (aln_high - aln_low) + 1 != term_range.len() {
-        panic!("{} {} {} {} {} {}", (aln_high - aln_low) + 1, term_range.len(),
-        view.colstart, view.seq_ncols_display(), view.term_ncols, view.namewidth);
-    }
+    assert!((aln_high - aln_low) + 1 == term_range.len());
 
     // In this loop we build the strings.
     let mut line_string = "┌".to_owned();
@@ -458,6 +449,10 @@ fn main() {
             .help("Input alignment in FASTA format (- for stdin)")
             .takes_value(true)
             .required(true)
+        ).arg(clap::Arg::with_name("uppercase")
+            .short("u")
+            .takes_value(false)
+            .help("Displays sequences in uppercase")
         ).get_matches();
 
     let filename = args.value_of("alignment").unwrap();
@@ -474,7 +469,8 @@ fn main() {
         // TODO: Better error message?
         Box::new(BufReader::new(std::fs::File::open(filename).unwrap()))
     };
-    let aln = Alignment::new(BufReader::new(buffered_io));
+    let uppercase = args.is_present("uppercase");
+    let aln = Alignment::new(BufReader::new(buffered_io), uppercase);
     let mut view = View::new(aln);
     display(&mut view);
 }
