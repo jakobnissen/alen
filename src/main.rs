@@ -1,10 +1,11 @@
-// To do: Make stdin work on MacOS
 // To do: Better error handling in general
 // To do: Factorize to files
 // To do: More formats?
+// To do: Possibly show deviation from consensus?
+// To do: Add search
 
 use std::convert::TryInto;
-use std::io::{stdin, BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::ops::RangeInclusive;
 use std::path::Path;
 use std::cmp::{min, max};
@@ -112,16 +113,7 @@ impl Alignment {
         for result in reader.records() {
             // TODO: Better error message - file nume and record number, perhaps
             let record = result.expect("Error during FASTA parsing");
-            let seq = record.seq().iter()
-                .map(|&byte| {
-                    // if uppercase, convert to char, uppercase, back to u8.
-                    // we already check the alphabet, so we can be very lax about safety
-                    if uppercase {
-                        (byte as char).to_uppercase().next().unwrap() as u8
-                    } else {
-                        byte
-                    }
-                }).collect::<Vec<_>>();
+            let seq = record.seq().iter().copied().collect::<Vec<_>>();
 
             // Check identical sequence lengths
             if let Some(len) = seqlength {
@@ -135,7 +127,18 @@ impl Alignment {
             graphemes.push(UnicodeSegmentation::graphemes(record.id(), true).map(|s| s.to_owned()).collect());
         }
 
+        // Verify alphabet
         let is_aa = !is_dna_alphabet(&seqs);
+
+        // Turn uppercase if requested
+        if uppercase {
+            for seq in seqs.iter_mut() {
+                for i in 0..seq.len() {
+                    let byte = seq[i];
+                    seq[i] = (byte as char).to_uppercase().next().unwrap() as u8
+                }
+            }
+        }
 
         if seqlength.map_or(true, |i| i < 1) {
             panic!("Error: Empty alignment") // TODO: More precise error
@@ -195,7 +198,7 @@ impl View {
     fn move_view<T: Write>(&mut self, io: &mut T, dy: isize, dx: isize) {
         self.rowstart = calculate_start(
             self.rowstart, dy, 
-            self.seq_ncols_display() as usize, self.aln.nrows()
+            self.seq_nrows_display() as usize, self.aln.nrows()
         );
         self.colstart = calculate_start(
             self.colstart, dx, 
@@ -276,7 +279,7 @@ fn display(view: &mut View) {
     io.flush().unwrap();
 
     loop {
-        let event = event::read().unwrap();
+        let event = event::read().unwrap(); // TODO: This will error taking stdin
 
         // Break on Q or Esc
         if event == Event::Key(KeyCode::Esc.into()) || event == Event::Key(KeyCode::Char('q').into()) {
@@ -373,6 +376,9 @@ fn draw_names<T: Write>(io: &mut T, view: &View) {
                 let mut name = graphemes[0..namelen].join("");
                 if elide {
                     name.push('…')
+                } else {
+                    let missing_graphemes = view.namewidth as usize - graphemes.len();
+                    name.push_str(&" ".repeat(missing_graphemes));
                 }
                 name
             };
@@ -500,7 +506,7 @@ fn main() {
         .author("Jakob Nybo Nissen <jakobnybonissen@gmail.com>")
         .about("Simple terminal alignment viewer")
         .arg(clap::Arg::with_name("alignment")
-            .help("Input alignment in FASTA format (- for stdin)")
+            .help("Input alignment in FASTA format")
             .takes_value(true)
             .required(true)
         ).arg(clap::Arg::with_name("uppercase")
@@ -517,12 +523,7 @@ fn main() {
         std::process::exit(1);
     }
 
-    let buffered_io: Box<dyn BufRead> = if filename == "-" {
-        Box::new(BufReader::new(stdin()))
-    } else {
-        // TODO: Better error message?
-        Box::new(BufReader::new(std::fs::File::open(filename).unwrap()))
-    };
+    let buffered_io = BufReader::new(std::fs::File::open(filename).unwrap());
     let uppercase = args.is_present("uppercase");
     let aln = Alignment::new(BufReader::new(buffered_io), uppercase);
     let mut view = View::new(aln);
