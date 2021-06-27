@@ -27,16 +27,17 @@ const HEADER_LINES: usize = 2;
 const FOOTER_LINES: usize = 1;
 
 /// Panics if not valid biosequence, else returns true (aa) or false (dna)
-fn is_dna_alphabet(seqs: &[Vec<u8>]) -> bool {
+fn is_dna_alphabet(seqs: &[Vec<u8>], graphemes_vec: &[Vec<String>]) -> bool {
     let dna_alphabet = Alphabet::new(b"-ACMGRSVTUWYHKDBNacmgrsvtuwyhkdbn");
     let aa_alphabet = Alphabet::new(b"*-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz");
 
     let mut valid_dna = true;
-    for seq in seqs {
+    for (seq, graphemes) in seqs.iter().zip(graphemes_vec) {
         valid_dna &= dna_alphabet.is_word(seq);
         // DNA alphabet is a subset of AA alphabet, so we panic if it can't even be AA
         if !aa_alphabet.is_word(seq) {
-            panic!("Cannot interpret sequence as amino acids") // TODO: Better error
+            println!("ERROR:Sequence \"{}\" cannot be understood as amino acids.", graphemes.join(""));
+            std::process::exit(1);
         }
     }
     valid_dna
@@ -112,13 +113,22 @@ impl Alignment {
         let mut seqlength: Option<usize> = None;
         for result in reader.records() {
             // TODO: Better error message - file nume and record number, perhaps
-            let record = result.expect("Error during FASTA parsing");
+            let record = match result {
+                Ok(r) => r,
+                Err(e) => {
+                    println!("ERROR: During FASTA parsing, found error:");
+                    println!("{:?}", e);
+                    std::process::exit(1);
+                }
+            };
             let seq = record.seq().iter().copied().collect::<Vec<_>>();
 
             // Check identical sequence lengths
             if let Some(len) = seqlength {
                 if seq.len() != len {
-                    panic!("Error: Sequence lengths uneven") // TODO: More precise error
+                    println!("ERROR: Not all input sequences are the same length. \
+                    Expected sequence length {}, found {}.", len, seq.len());
+                    std::process::exit(1);
                 }
             } else {
                 seqlength = Some(seq.len())
@@ -128,7 +138,7 @@ impl Alignment {
         }
 
         // Verify alphabet
-        let is_aa = !is_dna_alphabet(&seqs);
+        let is_aa = !is_dna_alphabet(&seqs, &graphemes);
 
         // Turn uppercase if requested
         if uppercase {
@@ -141,8 +151,10 @@ impl Alignment {
         }
 
         if seqlength.map_or(true, |i| i < 1) {
-            panic!("Error: Empty alignment") // TODO: More precise error
+            println!("ERROR: Alignment has zero sequences, or has length 0.");
+            std::process::exit(1);
         }
+
         let longest_name = graphemes.iter().map(|v| v.len()).max().unwrap();
         Alignment{graphemes, longest_name, seqs, is_aa}
     }
@@ -150,7 +162,7 @@ impl Alignment {
 
 /// A view object contains all information of what to draw to the screen
 struct View {
-    rowstart: usize,
+    rowstart: usize, // zero-based index
     colstart: usize,
     term_nrows: u16, // obtained from terminal
     term_ncols: u16, // obtained from terminal
