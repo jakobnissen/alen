@@ -1,8 +1,14 @@
 // To do: Better error handling in general
 // To do: Factorize to files
 // To do: More formats?
+// To do: Jump to column?
+// To do: Improve performance:
+    // First improve drawing sequence: Queue only the minimal amount of ops, only
+    // change color when there is actually a color change.
+    // Then implement multithreading. One thread reads input and moves view etc,
+    // another draws. Drawings can be "skipped" if there are still queued inputs, perhaps?
 // To do: Possibly show deviation from consensus?
-// To do: Add search
+// To do: Add search - verify input to match current alphabet when typing, and then just do findfirst? Or Regex with i?
 
 use std::convert::TryInto;
 use std::io::{BufRead, BufReader, Write};
@@ -481,28 +487,32 @@ fn draw_sequences<T: Write>(io: &mut T, view: &View) {
         None => return
     };
 
+    let mut oldcolor: Option<Color> = None;
     for (i, alnrow) in row_range.enumerate() {
         let termrow = (i + HEADER_LINES) as u16;
         queue!(
             io,
             cursor::MoveTo(view.namewidth + 1, termrow),
         ).unwrap();
-        for col in col_range.clone() {
-            let byte = view.aln.seqs[alnrow][col];
+        for byte in view.aln.seqs[alnrow][col_range.clone()].iter() {
             let color = if view.aln.is_aa {
-                get_color_background_aa(byte)
+                get_color_background_aa(*byte)
             } else {
-                get_color_background_dna(byte)
+                get_color_background_dna(*byte)
             };
-            match color {
-                Some(clr) => queue!(
-                    io,
-                    SetForegroundColor(Color::Black),
-                    SetBackgroundColor(clr),
-                ).unwrap(),
-                None => queue!(io, ResetColor).unwrap(),
+            if color != oldcolor {
+                if let Some(clr) = color {
+                    queue!(
+                        io,
+                        SetForegroundColor(Color::Black),
+                        SetBackgroundColor(clr),
+                    ).unwrap();
+                } else {
+                    queue!(io, ResetColor).unwrap();
+                }
             };
-            queue!(io, Print(byte as char)).unwrap();
+            queue!(io, Print(*byte as char)).unwrap();
+            oldcolor = color;
         }
     }
 
@@ -531,7 +541,7 @@ fn main() {
 
     // Check if file exists
     if filename != "-" && !Path::new(filename).is_file() {
-        println!("Error: Filename not found: \"{}\"", filename);
+        println!("ERROR: Filename not found: \"{}\"", filename);
         std::process::exit(1);
     }
 
