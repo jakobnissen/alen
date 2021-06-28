@@ -488,6 +488,7 @@ fn draw_sequences<T: Write>(io: &mut T, view: &View) {
     };
 
     let mut oldcolor: Option<Color> = None;
+    let mut is_foreground_black = false;
     for (i, alnrow) in row_range.enumerate() {
         let termrow = (i + HEADER_LINES) as u16;
         queue!(
@@ -500,15 +501,18 @@ fn draw_sequences<T: Write>(io: &mut T, view: &View) {
             } else {
                 get_color_background_dna(*byte)
             };
+            // if color is same as before, don't queue up color changing operations
             if color != oldcolor {
                 if let Some(clr) = color {
-                    queue!(
-                        io,
-                        SetForegroundColor(Color::Black),
-                        SetBackgroundColor(clr),
-                    ).unwrap();
+                    // only set foreground to black if it isn't already
+                    if !is_foreground_black {
+                        queue!(io, SetForegroundColor(Color::Black)).unwrap();
+                        is_foreground_black = true;
+                    };
+                    queue!(io, SetBackgroundColor(clr)).unwrap();
                 } else {
                     queue!(io, ResetColor).unwrap();
+                    is_foreground_black = false;
                 }
             };
             queue!(io, Print(*byte as char)).unwrap();
