@@ -51,7 +51,7 @@ fn verify_alphabet(seqs: &[Vec<u8>], graphemes_vec: &[Vec<String>], must_aa: boo
             std::process::exit(1);
         }
     }
-    valid_dna & !must_aa
+    must_aa | !valid_dna
 }
 
 fn make_uppercase(seqs: &mut [Vec<u8>]) {
@@ -167,7 +167,7 @@ impl Alignment {
         }
 
         // Verify alphabet
-        let is_aa = !verify_alphabet(&seqs, &graphemes, must_aa);
+        let is_aa = verify_alphabet(&seqs, &graphemes, must_aa);
 
         // Turn uppercase if requested
         if uppercase {
