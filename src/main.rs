@@ -3,18 +3,18 @@
 // To do: More formats?
 // To do: Jump to column?
 // To do: Improve performance:
-    // First improve drawing sequence: Queue only the minimal amount of ops, only
-    // change color when there is actually a color change.
-    // Then implement multithreading. One thread reads input and moves view etc,
-    // another draws. Drawings can be "skipped" if there are still queued inputs, perhaps?
+// First improve drawing sequence: Queue only the minimal amount of ops, only
+// change color when there is actually a color change.
+// Then implement multithreading. One thread reads input and moves view etc,
+// another draws. Drawings can be "skipped" if there are still queued inputs, perhaps?
 // To do: Possibly show deviation from consensus?
 // To do: Add search - verify input to match current alphabet when typing, and then just do findfirst? Or Regex with i?
 
+use std::cmp::{max, min};
 use std::convert::TryInto;
 use std::io::{BufRead, BufReader, Write};
 use std::ops::RangeInclusive;
 use std::path::Path;
-use std::cmp::{min, max};
 
 use bio::alphabets::Alphabet;
 use bio::io::fasta;
@@ -25,7 +25,7 @@ use crossterm::{
     cursor,
     event::{self, Event, KeyCode, KeyEvent},
     execute, queue,
-    style::{Print, Color, SetBackgroundColor, SetForegroundColor, ResetColor},
+    style::{Color, Print, ResetColor, SetBackgroundColor, SetForegroundColor},
     terminal::{self, ClearType},
 };
 
@@ -42,7 +42,10 @@ fn is_dna_alphabet(seqs: &[Vec<u8>], graphemes_vec: &[Vec<String>]) -> bool {
         valid_dna &= dna_alphabet.is_word(seq);
         // DNA alphabet is a subset of AA alphabet, so we panic if it can't even be AA
         if !aa_alphabet.is_word(seq) {
-            println!("ERROR:Sequence \"{}\" cannot be understood as amino acids.", graphemes.join(""));
+            println!(
+                "ERROR:Sequence \"{}\" cannot be understood as amino acids.",
+                graphemes.join("")
+            );
             std::process::exit(1);
         }
     }
@@ -54,8 +57,8 @@ fn get_color_background_dna(byte: u8) -> Option<Color> {
         b'a' | b'A' => Some(Color::AnsiValue(228)), // yellow
         b'c' | b'C' => Some(Color::AnsiValue(77)),  // green
         b'g' | b'G' => Some(Color::AnsiValue(39)),  // blue
-        b't' | b'T' | b'u' | b'U' => Some(Color::AnsiValue(168)),  // pink
-        _ => None
+        b't' | b'T' | b'u' | b'U' => Some(Color::AnsiValue(168)), // pink
+        _ => None,
     }
 }
 
@@ -100,7 +103,7 @@ struct Alignment {
     graphemes: Vec<Vec<String>>,
     longest_name: usize,
     seqs: Vec<Vec<u8>>,
-    is_aa: bool
+    is_aa: bool,
 }
 
 impl Alignment {
@@ -132,15 +135,23 @@ impl Alignment {
             // Check identical sequence lengths
             if let Some(len) = seqlength {
                 if seq.len() != len {
-                    println!("ERROR: Not all input sequences are the same length. \
-                    Expected sequence length {}, found {}.", len, seq.len());
+                    println!(
+                        "ERROR: Not all input sequences are the same length. \
+                    Expected sequence length {}, found {}.",
+                        len,
+                        seq.len()
+                    );
                     std::process::exit(1);
                 }
             } else {
                 seqlength = Some(seq.len())
             }
             seqs.push(seq);
-            graphemes.push(UnicodeSegmentation::graphemes(record.id(), true).map(|s| s.to_owned()).collect());
+            graphemes.push(
+                UnicodeSegmentation::graphemes(record.id(), true)
+                    .map(|s| s.to_owned())
+                    .collect(),
+            );
         }
 
         // Verify alphabet
@@ -161,7 +172,12 @@ impl Alignment {
         }
 
         let longest_name = graphemes.iter().map(|v| v.len()).max().unwrap();
-        Alignment{graphemes, longest_name, seqs, is_aa}
+        Alignment {
+            graphemes,
+            longest_name,
+            seqs,
+            is_aa,
+        }
     }
 }
 
@@ -172,7 +188,7 @@ struct View {
     term_nrows: u16, // obtained from terminal
     term_ncols: u16, // obtained from terminal
     namewidth: u16,
-    aln: Alignment
+    aln: Alignment,
 }
 
 impl View {
@@ -196,16 +212,10 @@ impl View {
         let (oldcol, oldrow) = (self.colstart, self.rowstart);
         self.term_nrows = nrows;
         self.term_ncols = ncols;
-        
+
         // Calculate new starts (if you zoom out)
-        self.rowstart = calculate_start(
-            oldrow, 0, 
-            self.seq_nrows_display(), self.aln.nrows()
-        );
-        self.colstart = calculate_start(
-            oldcol, 0, 
-            self.seq_ncols_display(), self.aln.ncols()
-        );
+        self.rowstart = calculate_start(oldrow, 0, self.seq_nrows_display(), self.aln.nrows());
+        self.colstart = calculate_start(oldcol, 0, self.seq_ncols_display(), self.aln.ncols());
 
         // Set namewidth and padded names
         // TODO: Better calculation of namewidth, so it doesn't reset if you modify it
@@ -217,12 +227,16 @@ impl View {
         let old_colstart = self.colstart;
 
         self.rowstart = calculate_start(
-            self.rowstart, dy, 
-            self.seq_nrows_display() as usize, self.aln.nrows()
+            self.rowstart,
+            dy,
+            self.seq_nrows_display() as usize,
+            self.aln.nrows(),
         );
         self.colstart = calculate_start(
-            self.colstart, dx, 
-            self.seq_ncols_display() as usize, self.aln.ncols()
+            self.colstart,
+            dx,
+            self.seq_ncols_display() as usize,
+            self.aln.ncols(),
         );
 
         // Only update the view if the view was actually moved.
@@ -254,9 +268,7 @@ impl View {
     fn seq_row_range(&self) -> Option<RangeInclusive<usize>> {
         match self.seq_nrows_display() {
             0 => None,
-            nrows => Some(
-                self.rowstart..=(min(self.aln.nrows() - 1, self.rowstart + nrows - 1))
-            )
+            nrows => Some(self.rowstart..=(min(self.aln.nrows() - 1, self.rowstart + nrows - 1))),
         }
     }
 
@@ -267,19 +279,12 @@ impl View {
     fn seq_col_range(&self) -> Option<RangeInclusive<usize>> {
         match self.seq_ncols_display() {
             0 => None,
-            ncols => Some(
-                self.colstart..=(min(self.aln.ncols() - 1, self.colstart + ncols - 1))
-            )
+            ncols => Some(self.colstart..=(min(self.aln.ncols() - 1, self.colstart + ncols - 1))),
         }
     }
 }
 
-fn calculate_start(
-    current: usize,
-    delta: isize,
-    displaysize: usize,
-    n_rows_cols: usize,
-) -> usize {
+fn calculate_start(current: usize, delta: isize, displaysize: usize, n_rows_cols: usize) -> usize {
     let last_index = n_rows_cols.saturating_sub(displaysize);
     let moveto = (current as isize).saturating_add(delta);
     if moveto < 0 {
@@ -294,10 +299,7 @@ fn calculate_start(
 fn display(view: &mut View) {
     let mut io = std::io::stdout();
     terminal::enable_raw_mode().unwrap();
-    execute!(io,
-        terminal::EnterAlternateScreen,
-        cursor::Hide,
-    ).unwrap();
+    execute!(io, terminal::EnterAlternateScreen, cursor::Hide,).unwrap();
 
     draw_all(&mut io, view);
     io.flush().unwrap();
@@ -306,38 +308,82 @@ fn display(view: &mut View) {
         let event = event::read().unwrap(); // TODO: This will error taking stdin
 
         // Break on Q or Esc
-        if event == Event::Key(KeyCode::Esc.into()) || event == Event::Key(KeyCode::Char('q').into()) {
+        if event == Event::Key(KeyCode::Esc.into())
+            || event == Event::Key(KeyCode::Char('q').into())
+        {
             break;
         }
 
         match event {
             Event::Key(kevent) => {
                 let delta = match kevent {
-                    KeyEvent{code: KeyCode::Left, modifiers: event::KeyModifiers::NONE} => Some((0, -1)),
-                    KeyEvent{code: KeyCode::Right, modifiers: event::KeyModifiers::NONE} => Some((0, 1)),
-                    KeyEvent{code: KeyCode::Down, modifiers: event::KeyModifiers::NONE} => Some((1, 0)),
-                    KeyEvent{code: KeyCode::Up, modifiers: event::KeyModifiers::NONE} => Some((-1, 0)),
+                    KeyEvent {
+                        code: KeyCode::Left,
+                        modifiers: event::KeyModifiers::NONE,
+                    } => Some((0, -1)),
+                    KeyEvent {
+                        code: KeyCode::Right,
+                        modifiers: event::KeyModifiers::NONE,
+                    } => Some((0, 1)),
+                    KeyEvent {
+                        code: KeyCode::Down,
+                        modifiers: event::KeyModifiers::NONE,
+                    } => Some((1, 0)),
+                    KeyEvent {
+                        code: KeyCode::Up,
+                        modifiers: event::KeyModifiers::NONE,
+                    } => Some((-1, 0)),
 
                     // SHIFT: Move by 10
-                    KeyEvent{code: KeyCode::Left, modifiers: event::KeyModifiers::SHIFT} => Some((0, -10)),
-                    KeyEvent{code: KeyCode::Right, modifiers: event::KeyModifiers::SHIFT} => Some((0, 10)),
-                    KeyEvent{code: KeyCode::Down, modifiers: event::KeyModifiers::SHIFT} => Some((10, 0)),
-                    KeyEvent{code: KeyCode::Up, modifiers: event::KeyModifiers::SHIFT} => Some((-10, 0)),
+                    KeyEvent {
+                        code: KeyCode::Left,
+                        modifiers: event::KeyModifiers::SHIFT,
+                    } => Some((0, -10)),
+                    KeyEvent {
+                        code: KeyCode::Right,
+                        modifiers: event::KeyModifiers::SHIFT,
+                    } => Some((0, 10)),
+                    KeyEvent {
+                        code: KeyCode::Down,
+                        modifiers: event::KeyModifiers::SHIFT,
+                    } => Some((10, 0)),
+                    KeyEvent {
+                        code: KeyCode::Up,
+                        modifiers: event::KeyModifiers::SHIFT,
+                    } => Some((-10, 0)),
 
                     // CONTROL: Move to end
-                    KeyEvent{code: KeyCode::Left, modifiers: event::KeyModifiers::CONTROL} => Some((0, isize::MIN)),
-                    KeyEvent{code: KeyCode::Right, modifiers: event::KeyModifiers::CONTROL} => Some((0, isize::MAX)),
-                    KeyEvent{code: KeyCode::Down, modifiers: event::KeyModifiers::CONTROL} => Some((isize::MAX, 0)),
-                    KeyEvent{code: KeyCode::Up, modifiers: event::KeyModifiers::CONTROL} => Some((isize::MIN, 0)),
-                    _ => None
+                    KeyEvent {
+                        code: KeyCode::Left,
+                        modifiers: event::KeyModifiers::CONTROL,
+                    } => Some((0, isize::MIN)),
+                    KeyEvent {
+                        code: KeyCode::Right,
+                        modifiers: event::KeyModifiers::CONTROL,
+                    } => Some((0, isize::MAX)),
+                    KeyEvent {
+                        code: KeyCode::Down,
+                        modifiers: event::KeyModifiers::CONTROL,
+                    } => Some((isize::MAX, 0)),
+                    KeyEvent {
+                        code: KeyCode::Up,
+                        modifiers: event::KeyModifiers::CONTROL,
+                    } => Some((isize::MIN, 0)),
+                    _ => None,
                 };
                 if let Some((dy, dx)) = delta {
                     view.move_view(&mut io, dy, dx)
                 };
                 let name_move = match kevent {
-                    KeyEvent{code: KeyCode::Char(','), modifiers: event::KeyModifiers::NONE} => Some(-1),
-                    KeyEvent{code: KeyCode::Char('.'), modifiers: event::KeyModifiers::NONE} => Some(1),
-                    _ => None
+                    KeyEvent {
+                        code: KeyCode::Char(','),
+                        modifiers: event::KeyModifiers::NONE,
+                    } => Some(-1),
+                    KeyEvent {
+                        code: KeyCode::Char('.'),
+                        modifiers: event::KeyModifiers::NONE,
+                    } => Some(1),
+                    _ => None,
                 };
 
                 // If the names were actually moved, re-draw the screen.
@@ -348,40 +394,26 @@ fn display(view: &mut View) {
                         draw_all(&mut io, view);
                     }
                 }
-
-            },
+            }
             Event::Resize(ncols, nrows) => {
                 view.resize(ncols, nrows);
                 draw_all(&mut io, view);
             }
-            _ => ()
+            _ => (),
         };
     }
 
-    execute!(
-        io,
-        ResetColor,
-        cursor::Show,
-        terminal::LeaveAlternateScreen
-    ).unwrap();
+    execute!(io, ResetColor, cursor::Show, terminal::LeaveAlternateScreen).unwrap();
     terminal::disable_raw_mode().unwrap();
 }
 
 fn draw_all<T: Write>(io: &mut T, view: &View) {
-    execute!(
-        io,
-        ResetColor,
-        terminal::Clear(ClearType::All),
-    ).unwrap();
+    execute!(io, ResetColor, terminal::Clear(ClearType::All),).unwrap();
 
     if view.term_ncols < 2 || view.term_nrows < 4 {
         // This seems silly, but I have it because it allows me to assume a minimal
         // terminal size when drawing the regular alignment
-        execute!(
-            io,
-            cursor::MoveTo(0, 0),
-            Print(":("),
-        ).unwrap();
+        execute!(io, cursor::MoveTo(0, 0), Print(":("),).unwrap();
     } else {
         draw_ruler(io, view);
         draw_names(io, view);
@@ -390,7 +422,6 @@ fn draw_all<T: Write>(io: &mut T, view: &View) {
     }
     io.flush().unwrap();
 }
-
 
 fn draw_names<T: Write>(io: &mut T, view: &View) {
     if let Some(range) = view.seq_row_range() {
@@ -417,7 +448,8 @@ fn draw_names<T: Write>(io: &mut T, view: &View) {
                 Print(name),
                 cursor::MoveTo(view.namewidth, termrow),
                 Print('│'),
-            ).unwrap();
+            )
+            .unwrap();
         }
     }
 }
@@ -425,8 +457,8 @@ fn draw_names<T: Write>(io: &mut T, view: &View) {
 // TODO: This function is abhorrently complicated, make sure to rewrite it cleaner.
 fn draw_ruler<T: Write>(io: &mut T, view: &View) {
     // Get tick positions
-    let term_range = (view.namewidth + 1)..=(view.term_ncols-1);
-    let aln_range = view.colstart..=(view.colstart+view.seq_ncols_display() - 1);
+    let term_range = (view.namewidth + 1)..=(view.term_ncols - 1);
+    let aln_range = view.colstart..=(view.colstart + view.seq_ncols_display() - 1);
 
     // Check they must be same length (TODO: debug statement here?)
     let (aln_low, aln_high) = aln_range.clone().into_inner();
@@ -446,7 +478,9 @@ fn draw_ruler<T: Write>(io: &mut T, view: &View) {
             beginning = false
         } else {
             line_string.push('─');
-            if beginning {num_string.push(' ')};
+            if beginning {
+                num_string.push(' ')
+            };
         }
     }
 
@@ -459,21 +493,22 @@ fn draw_ruler<T: Write>(io: &mut T, view: &View) {
         Print(num_string),
         cursor::MoveTo(view.namewidth, 1),
         Print(line_string),
-    ).unwrap();
+    )
+    .unwrap();
 }
 
 fn draw_footer<T: Write>(io: &mut T, view: &View) {
     // First we create the full footer, then we truncate, if needed
-    let mut footer = String::from(
-        "q/Esc: Quit   ←/→/↑/↓ + None/Shift/Ctrl: Move alignment   ./,: Adjust names"
-    );
+    let mut footer =
+        String::from("q/Esc: Quit   ←/→/↑/↓ + None/Shift/Ctrl: Move alignment   ./,: Adjust names");
     // Pad or truncate footer to match num columns
     let nchars = footer.chars().count();
     let ncols = view.term_ncols as usize;
 
     if nchars > ncols {
         footer = UnicodeSegmentation::graphemes(footer.as_str(), true)
-            .take(ncols).collect::<String>();
+            .take(ncols)
+            .collect::<String>();
     } else {
         footer.push_str(" ".repeat(ncols - nchars).as_str())
     }
@@ -485,30 +520,28 @@ fn draw_footer<T: Write>(io: &mut T, view: &View) {
         cursor::MoveTo(0, (view.term_nrows - 1) as u16),
         Print(footer),
         ResetColor,
-    ).unwrap();
+    )
+    .unwrap();
 }
 
 // This function is the performance bottleneck, so I try to queue as little as
-// possible to the terminal by checking every single operation to see if it's 
+// possible to the terminal by checking every single operation to see if it's
 // necessary
 fn draw_sequences<T: Write>(io: &mut T, view: &View) {
     let row_range = match view.seq_row_range() {
         Some(n) => n,
-        None => return
+        None => return,
     };
     let col_range = match view.seq_col_range() {
         Some(n) => n,
-        None => return
+        None => return,
     };
 
     let mut oldcolor: Option<Color> = None;
     let mut is_foreground_black = false;
     for (i, alnrow) in row_range.enumerate() {
         let termrow = (i + HEADER_LINES) as u16;
-        queue!(
-            io,
-            cursor::MoveTo(view.namewidth + 1, termrow),
-        ).unwrap();
+        queue!(io, cursor::MoveTo(view.namewidth + 1, termrow),).unwrap();
         for byte in view.aln.seqs[alnrow][col_range.clone()].iter() {
             let color = if view.aln.is_aa {
                 get_color_background_aa(*byte)
@@ -536,10 +569,7 @@ fn draw_sequences<T: Write>(io: &mut T, view: &View) {
         }
     }
 
-    queue!(
-        io,
-        ResetColor,
-    ).unwrap();
+    queue!(io, ResetColor,).unwrap();
 }
 
 fn main() {
@@ -547,15 +577,19 @@ fn main() {
         .version("0.1")
         .author("Jakob Nybo Nissen <jakobnybonissen@gmail.com>")
         .about("Simple terminal alignment viewer")
-        .arg(clap::Arg::with_name("alignment")
-            .help("Input alignment in FASTA format")
-            .takes_value(true)
-            .required(true)
-        ).arg(clap::Arg::with_name("uppercase")
-            .short("u")
-            .takes_value(false)
-            .help("Displays sequences in uppercase")
-        ).get_matches();
+        .arg(
+            clap::Arg::with_name("alignment")
+                .help("Input alignment in FASTA format")
+                .takes_value(true)
+                .required(true),
+        )
+        .arg(
+            clap::Arg::with_name("uppercase")
+                .short("u")
+                .takes_value(false)
+                .help("Displays sequences in uppercase"),
+        )
+        .get_matches();
 
     let filename = args.value_of("alignment").unwrap();
 
