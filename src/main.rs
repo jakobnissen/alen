@@ -33,7 +33,7 @@ const HEADER_LINES: usize = 2;
 const FOOTER_LINES: usize = 1;
 
 /// Panics if not valid biosequence, else returns true (aa) or false (dna)
-fn verify_alphabet(seqs: &[Vec<u8>], graphemes_vec: &[Vec<String>], must_aa: bool) -> bool {
+fn verify_alphabet(seqs: &[Vec<u8>], graphemes_vec: &[Graphemes], must_aa: bool) -> bool {
     let dna_alphabet = Alphabet::new(b"-ACMGRSVTUWYHKDBNacmgrsvtuwyhkdbn");
     let aa_alphabet = Alphabet::new(b"*-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz");
 
@@ -46,7 +46,7 @@ fn verify_alphabet(seqs: &[Vec<u8>], graphemes_vec: &[Vec<String>], must_aa: boo
         if !aa_alphabet.is_word(seq) {
             println!(
                 "ERROR:Sequence \"{}\" cannot be understood as amino acids.",
-                graphemes.join("")
+                graphemes.string
             );
             std::process::exit(1);
         }
@@ -111,9 +111,52 @@ fn get_color_background_aa(byte: u8) -> Option<Color> {
     }
 }
 
+struct Graphemes {
+    string: String,
+    grapheme_stop_indices: Option<Vec<usize>>
+}
+
+impl Graphemes {
+    fn new(st: &str) -> Graphemes {
+        let string = st.to_owned();
+        let grapheme_stop_indices = if string.is_ascii() {
+            None
+        } else {
+            Some({
+                let mut v: Vec<usize> = UnicodeSegmentation::grapheme_indices(string.as_str(), true)
+                    .skip(1).map(|(index, _grapheme)| {
+                    index - 1
+                }).collect();
+                v.push(string.len());
+                v
+            })
+        };
+        Graphemes{string, grapheme_stop_indices}
+    }
+
+    fn len(&self) -> usize {
+        match &self.grapheme_stop_indices {
+            None => self.string.len(),
+            Some(n) => n.len(),
+        }
+    }
+
+    fn get_n_graphemes(&self, n: usize) -> &str {
+        match &self.grapheme_stop_indices {
+            None => &self.string[0..n],
+            Some(v) => {
+                if n == 0 {
+                    ""
+                } else {
+                    &self.string[0..=v[n - 1]]
+                }
+            }
+        }
+    }
+}
+
 struct Alignment {
-    // TODO: Make graphemes vec vec str?
-    graphemes: Vec<Vec<String>>,
+    graphemes: Vec<Graphemes>,
     longest_name: usize,
     seqs: Vec<Vec<u8>>,
     is_aa: bool,
@@ -130,7 +173,7 @@ impl Alignment {
 
     fn new<T: BufRead>(file: T, uppercase: bool, must_aa: bool) -> Alignment {
         let mut seqs = Vec::new();
-        let mut graphemes: Vec<Vec<String>> = Vec::new();
+        let mut graphemes: Vec<Graphemes> = Vec::new();
         let reader = fasta::Reader::new(file);
         let mut seqlength: Option<usize> = None;
         for result in reader.records() {
@@ -159,11 +202,7 @@ impl Alignment {
                 seqlength = Some(seq.len())
             }
             seqs.push(seq);
-            graphemes.push(
-                UnicodeSegmentation::graphemes(record.id(), true)
-                    .map(|s| s.to_owned())
-                    .collect(),
-            );
+            graphemes.push(Graphemes::new(record.id()));
         }
 
         // Verify alphabet
@@ -441,7 +480,7 @@ fn draw_names<T: Write>(io: &mut T, view: &View) {
                 let graphemes = &view.aln.graphemes[nameindex];
                 let elide = graphemes.len() > view.namewidth as usize;
                 let namelen = min(graphemes.len(), view.namewidth as usize - elide as usize);
-                let mut name = graphemes[0..namelen].join("");
+                let mut name = graphemes.get_n_graphemes(namelen).to_owned();
                 if elide {
                     name.push('…')
                 } else {
