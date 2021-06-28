@@ -33,13 +33,15 @@ const HEADER_LINES: usize = 2;
 const FOOTER_LINES: usize = 1;
 
 /// Panics if not valid biosequence, else returns true (aa) or false (dna)
-fn is_dna_alphabet(seqs: &[Vec<u8>], graphemes_vec: &[Vec<String>]) -> bool {
+fn verify_alphabet(seqs: &[Vec<u8>], graphemes_vec: &[Vec<String>], must_aa: bool) -> bool {
     let dna_alphabet = Alphabet::new(b"-ACMGRSVTUWYHKDBNacmgrsvtuwyhkdbn");
     let aa_alphabet = Alphabet::new(b"*-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz");
 
     let mut valid_dna = true;
     for (seq, graphemes) in seqs.iter().zip(graphemes_vec) {
-        valid_dna &= dna_alphabet.is_word(seq);
+        if !must_aa {
+            valid_dna &= dna_alphabet.is_word(seq);
+        }
         // DNA alphabet is a subset of AA alphabet, so we panic if it can't even be AA
         if !aa_alphabet.is_word(seq) {
             println!(
@@ -49,7 +51,18 @@ fn is_dna_alphabet(seqs: &[Vec<u8>], graphemes_vec: &[Vec<String>]) -> bool {
             std::process::exit(1);
         }
     }
-    valid_dna
+    valid_dna & !must_aa
+}
+
+fn make_uppercase(seqs: &mut [Vec<u8>]) {
+    // We exploit the fact that only [A-Za-z\-\*] is allowed. Uppercasing this
+    // means setting the third-to-top bit to 0. For - or *, we don't change the bit.
+    for seq in seqs.iter_mut() {
+        for byte in seq.iter_mut() {
+            *byte &= !(((*byte >= b'A') as u8) << 5)
+        }
+    } 
+
 }
 
 fn get_color_background_dna(byte: u8) -> Option<Color> {
@@ -108,20 +121,19 @@ struct Alignment {
 
 impl Alignment {
     fn nrows(&self) -> usize {
-        self.graphemes.len()
+        self.seqs.len()
     }
 
     fn ncols(&self) -> usize {
         self.seqs[0].len()
     }
 
-    fn new<T: BufRead>(file: T, uppercase: bool) -> Alignment {
+    fn new<T: BufRead>(file: T, uppercase: bool, must_aa: bool) -> Alignment {
         let mut seqs = Vec::new();
         let mut graphemes: Vec<Vec<String>> = Vec::new();
         let reader = fasta::Reader::new(file);
         let mut seqlength: Option<usize> = None;
         for result in reader.records() {
-            // TODO: Better error message - file nume and record number, perhaps
             let record = match result {
                 Ok(r) => r,
                 Err(e) => {
@@ -155,15 +167,11 @@ impl Alignment {
         }
 
         // Verify alphabet
-        let is_aa = !is_dna_alphabet(&seqs, &graphemes);
+        let is_aa = !verify_alphabet(&seqs, &graphemes, must_aa);
 
         // Turn uppercase if requested
         if uppercase {
-            for seq in seqs.iter_mut() {
-                for byte in seq.iter_mut() {
-                    *byte = (*byte as char).to_uppercase().next().unwrap() as u8
-                }
-            }
+            make_uppercase(&mut seqs);
         }
 
         if seqlength.map_or(true, |i| i < 1) {
@@ -589,6 +597,12 @@ fn main() {
                 .takes_value(false)
                 .help("Displays sequences in uppercase"),
         )
+        .arg(
+            clap::Arg::with_name("aminoacids")
+                .short("a")
+                .takes_value(false)
+                .help("Force parsing as amino acids"),
+        )
         .get_matches();
 
     let filename = args.value_of("alignment").unwrap();
@@ -601,7 +615,8 @@ fn main() {
 
     let buffered_io = BufReader::new(std::fs::File::open(filename).unwrap());
     let uppercase = args.is_present("uppercase");
-    let aln = Alignment::new(BufReader::new(buffered_io), uppercase);
+    let must_aa = args.is_present("aminoacids");
+    let aln = Alignment::new(BufReader::new(buffered_io), uppercase, must_aa);
     let mut view = View::new(aln);
     display(&mut view);
 }
