@@ -502,45 +502,37 @@ fn draw_names<T: Write>(io: &mut T, view: &View) {
     }
 }
 
-// TODO: This function is abhorrently complicated, make sure to rewrite it cleaner.
 fn draw_ruler<T: Write>(io: &mut T, view: &View) {
-    // Get tick positions
-    let term_range = (view.namewidth + 1)..=(view.term_ncols - 1);
-    let aln_range = view.colstart..=(view.colstart + view.seq_ncols_display() - 1);
+    // Make the top line with the numbers.
+    let num_string = {
+        let mut string = String::new();
+        let start = 10 * (view.colstart / 10);
+        let stop = view.colstart + view.seq_ncols_display() + 1;
+        for i in (start..stop).step_by(10) {
+            let add = i.to_string();
+            string.push_str(&add);
+            string.push_str(&" ".repeat(10 - add.len()));
+        };
+        let start_index = view.colstart - start;
+        string[start_index..=(start_index + view.seq_ncols_display())].to_owned()
+    };
 
-    // Check they must be same length (TODO: debug statement here?)
-    let (aln_low, aln_high) = aln_range.clone().into_inner();
-    assert!((aln_high - aln_low) + 1 == term_range.len());
-
-    // In this loop we build the strings.
-    let mut line_string = "┌".to_owned();
-    let mut num_string = " ".to_owned();
-    let mut beginning = true;
-    for alncol in aln_range {
-        // draw tick
-        if (alncol + 1) % 10 == 0 {
-            line_string.push('┴');
-            let add = (alncol + 1).to_string();
-            num_string.push_str(&add);
-            num_string.push_str(&" ".repeat(10 - add.len()));
-            beginning = false
-        } else {
-            line_string.push('─');
-            if beginning {
-                num_string.push(' ')
-            };
-        }
-    }
-
-    // Make sure it's not too long! The final byte is the leading space.
-    num_string.truncate(term_range.len() + 1);
+    // Make the bottom line with the ticks
+    let tick_string = {
+        let aln_range = view.colstart..=(view.colstart + view.seq_ncols_display() - 1);
+        let mut tick_string = "┌".to_owned();
+        for alncol in aln_range {
+            tick_string.push(if (alncol + 1) % 10 == 0 {'┴'} else {'─'})
+        };
+        tick_string
+    };
 
     queue!(
         io,
         cursor::MoveTo(view.namewidth, 0),
         Print(num_string),
         cursor::MoveTo(view.namewidth, 1),
-        Print(line_string),
+        Print(tick_string),
     )
     .unwrap();
 }
