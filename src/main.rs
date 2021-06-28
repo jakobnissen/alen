@@ -270,10 +270,13 @@ impl View {
             colstart: 0,
             term_nrows: 0,
             term_ncols: 0,
-            namewidth: ncols >> 2,
+            namewidth: 0,
             aln,
         };
+        // We need to resize before we resize names, because the latter
+        // depends on a nonzero terminal size.
         view.resize(ncols, nrows);
+        view.resize_names((ncols >> 2) as isize);
         view
     }
 
