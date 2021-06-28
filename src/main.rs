@@ -2,10 +2,7 @@
 // To do: Factorize to files
 // To do: More formats?
 // To do: Jump to column?
-// To do: Improve performance:
-// First improve drawing sequence: Queue only the minimal amount of ops, only
-// change color when there is actually a color change.
-// Then implement multithreading. One thread reads input and moves view etc,
+// To do: Implement multithreading. One thread reads input and moves view etc,
 // another draws. Drawings can be "skipped" if there are still queued inputs, perhaps?
 // To do: Possibly show deviation from consensus?
 // To do: Add search - verify input to match current alphabet when typing, and then just do findfirst? Or Regex with i?
@@ -61,8 +58,7 @@ fn make_uppercase(seqs: &mut [Vec<u8>]) {
         for byte in seq.iter_mut() {
             *byte &= !(((*byte >= b'A') as u8) << 5)
         }
-    } 
-
+    }
 }
 
 fn get_color_background_dna(byte: u8) -> Option<Color> {
@@ -113,7 +109,7 @@ fn get_color_background_aa(byte: u8) -> Option<Color> {
 
 struct Graphemes {
     string: String,
-    grapheme_stop_indices: Option<Vec<usize>>
+    grapheme_stop_indices: Option<Vec<usize>>,
 }
 
 impl Graphemes {
@@ -123,15 +119,19 @@ impl Graphemes {
             None
         } else {
             Some({
-                let mut v: Vec<usize> = UnicodeSegmentation::grapheme_indices(string.as_str(), true)
-                    .skip(1).map(|(index, _grapheme)| {
-                    index - 1
-                }).collect();
+                let mut v: Vec<usize> =
+                    UnicodeSegmentation::grapheme_indices(string.as_str(), true)
+                        .skip(1)
+                        .map(|(index, _grapheme)| index - 1)
+                        .collect();
                 v.push(string.len());
                 v
             })
         };
-        Graphemes{string, grapheme_stop_indices}
+        Graphemes {
+            string,
+            grapheme_stop_indices,
+        }
     }
 
     fn len(&self) -> usize {
@@ -303,7 +303,8 @@ impl View {
         let mut namewidth = (self.namewidth as isize) + delta;
         namewidth = max(0, namewidth); // not negative
         namewidth = min(namewidth, (self.term_ncols as isize).saturating_sub(2)); // do not exceed bounds
-        // do not exceed longest name shown on screen
+        
+        // Do not exceed longest name shown on screen
         namewidth = min(namewidth, self.aln.longest_name as isize);
         self.namewidth = namewidth.try_into().unwrap();
     }
