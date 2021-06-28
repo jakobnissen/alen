@@ -149,9 +149,8 @@ impl Alignment {
         // Turn uppercase if requested
         if uppercase {
             for seq in seqs.iter_mut() {
-                for i in 0..seq.len() {
-                    let byte = seq[i];
-                    seq[i] = (byte as char).to_uppercase().next().unwrap() as u8
+                for byte in seq.iter_mut() {
+                    *byte = (*byte as char).to_uppercase().next().unwrap() as u8
                 }
             }
         }
@@ -214,6 +213,9 @@ impl View {
     }
 
     fn move_view<T: Write>(&mut self, io: &mut T, dy: isize, dx: isize) {
+        let old_rowstart = self.rowstart;
+        let old_colstart = self.colstart;
+
         self.rowstart = calculate_start(
             self.rowstart, dy, 
             self.seq_nrows_display() as usize, self.aln.nrows()
@@ -222,14 +224,18 @@ impl View {
             self.colstart, dx, 
             self.seq_ncols_display() as usize, self.aln.ncols()
         );
-        if dy != 0 {
+
+        // Only update the view if the view was actually moved.
+        if self.rowstart != old_rowstart {
             draw_names(io, self);
         }
-        if dx != 0 {
+        if self.colstart != old_colstart {
             draw_ruler(io, self)
         }
-        draw_sequences(io, self);
-        io.flush().unwrap();
+        if self.rowstart != old_rowstart || self.colstart != old_colstart {
+            draw_sequences(io, self);
+            io.flush().unwrap();
+        }
     }
 
     fn resize_names(&mut self, delta: isize) {
@@ -333,9 +339,14 @@ fn display(view: &mut View) {
                     KeyEvent{code: KeyCode::Char('.'), modifiers: event::KeyModifiers::NONE} => Some(1),
                     _ => None
                 };
+
+                // If the names were actually moved, re-draw the screen.
                 if let Some(delta) = name_move {
+                    let old_namewidth = view.namewidth;
                     view.resize_names(delta);
-                    draw_all(&mut io, view);
+                    if old_namewidth != view.namewidth {
+                        draw_all(&mut io, view);
+                    }
                 }
 
             },
@@ -477,6 +488,9 @@ fn draw_footer<T: Write>(io: &mut T, view: &View) {
     ).unwrap();
 }
 
+// This function is the performance bottleneck, so I try to queue as little as
+// possible to the terminal by checking every single operation to see if it's 
+// necessary
 fn draw_sequences<T: Write>(io: &mut T, view: &View) {
     let row_range = match view.seq_row_range() {
         Some(n) => n,
@@ -503,6 +517,7 @@ fn draw_sequences<T: Write>(io: &mut T, view: &View) {
             };
             // if color is same as before, don't queue up color changing operations
             if color != oldcolor {
+                // If the current cell needs a background color, set it
                 if let Some(clr) = color {
                     // only set foreground to black if it isn't already
                     if !is_foreground_black {
@@ -510,6 +525,7 @@ fn draw_sequences<T: Write>(io: &mut T, view: &View) {
                         is_foreground_black = true;
                     };
                     queue!(io, SetBackgroundColor(clr)).unwrap();
+                // Otherwise, reset to default color scheme
                 } else {
                     queue!(io, ResetColor).unwrap();
                     is_foreground_black = false;
