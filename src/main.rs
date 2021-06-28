@@ -1,6 +1,7 @@
 // To do: Better error handling in general
 // To do: Factorize to files
 // To do: More formats?
+// To do: Make stdin work on MacOS
 // To do: Jump to column?
 // To do: Implement multithreading. One thread reads input and moves view etc,
 // another draws. Drawings can be "skipped" if there are still queued inputs, perhaps?
@@ -36,7 +37,7 @@ fn verify_alphabet(seqs: &[Vec<u8>], graphemes_vec: &[Graphemes], must_aa: bool)
 
     let mut valid_dna = true;
     for (seq, graphemes) in seqs.iter().zip(graphemes_vec) {
-        if !must_aa {
+        if !must_aa && valid_dna {
             valid_dna &= dna_alphabet.is_word(seq);
         }
         // DNA alphabet is a subset of AA alphabet, so we panic if it can't even be AA
@@ -107,23 +108,37 @@ fn get_color_background_aa(byte: u8) -> Option<Color> {
     }
 }
 
+/// A string that is separated into its constituent graphemes, used for printing
+/// with uniform width.
+/// The point of this struct is to avoid doing grapheme computations on ASCII
+/// strings, and to only compute grapheme offsets once for each string.
+
 struct Graphemes {
     string: String,
+    /// If the string is ASCII (it usually is), we don't bother saving this.
     grapheme_stop_indices: Option<Vec<usize>>,
 }
 
 impl Graphemes {
     fn new(st: &str) -> Graphemes {
         let string = st.to_owned();
+        // If string is ASCII, we save only the string itself, and don't bother
+        // to do grapheme identification, since 1 grapheme == 1 byte == 1 char
         let grapheme_stop_indices = if string.is_ascii() {
             None
         } else {
+            // Else we add in the LAST byte of each graphemes in vector V,
+            // such that the first N graphemes of the string are encoded by
+            // the bytes 0..=V[N-1].
             Some({
                 let mut v: Vec<usize> =
                     UnicodeSegmentation::grapheme_indices(string.as_str(), true)
                         .skip(1)
+                        // The iterator gives start indices, I assume end indices of the
+                        // previous grapheme is the previous byte
                         .map(|(index, _grapheme)| index - 1)
                         .collect();
+                // End byte of last grapheme is just the last byte-index of the string
                 v.push(string.len());
                 v
             })
@@ -134,6 +149,7 @@ impl Graphemes {
         }
     }
 
+    /// Number of graphemes in string.
     fn len(&self) -> usize {
         match &self.grapheme_stop_indices {
             None => self.string.len(),
@@ -141,14 +157,20 @@ impl Graphemes {
         }
     }
 
-    fn get_n_graphemes(&self, n: usize) -> &str {
-        match &self.grapheme_stop_indices {
-            None => &self.string[0..n],
-            Some(v) => {
-                if n == 0 {
-                    ""
-                } else {
-                    &self.string[0..=v[n - 1]]
+    /// Get a string slice with the first N graphemes. If N is out of bounds,
+    /// returns None.
+    fn get_n_graphemes(&self, n: usize) -> Option<&str> {
+        if n > self.len() {
+            None
+        } else {
+            match &self.grapheme_stop_indices {
+                None => Some(&self.string[0..n]),
+                Some(v) => {
+                    if n == 0 {
+                        Some("")
+                    } else {
+                        Some(&self.string[0..=v[n - 1]])
+                    }
                 }
             }
         }
@@ -157,6 +179,8 @@ impl Graphemes {
 
 struct Alignment {
     graphemes: Vec<Graphemes>,
+    // longest as in number of graphemes. We cache this for efficiency, it can be
+    // computed from the graphemes field easily
     longest_name: usize,
     seqs: Vec<Vec<u8>>,
     is_aa: bool,
@@ -233,22 +257,22 @@ struct View {
     rowstart: usize, // zero-based index
     colstart: usize,
     term_nrows: u16, // obtained from terminal
-    term_ncols: u16, // obtained from terminal
+    term_ncols: u16,
     namewidth: u16,
     aln: Alignment,
 }
 
 impl View {
     fn new(aln: Alignment) -> View {
+        let (ncols, nrows) = terminal::size().unwrap();
         let mut view = View {
             rowstart: 0,
             colstart: 0,
             term_nrows: 0,
             term_ncols: 0,
-            namewidth: 0,
+            namewidth: ncols >> 2,
             aln,
         };
-        let (ncols, nrows) = terminal::size().unwrap();
         view.resize(ncols, nrows);
         view
     }
@@ -264,9 +288,11 @@ impl View {
         self.rowstart = calculate_start(oldrow, 0, self.seq_nrows_display(), self.aln.nrows());
         self.colstart = calculate_start(oldcol, 0, self.seq_ncols_display(), self.aln.ncols());
 
-        // Set namewidth and padded names
-        // TODO: Better calculation of namewidth, so it doesn't reset if you modify it
-        self.resize_names(min(30, (ncols >> 2) as isize));
+        // Calculate new namewidth
+        if self.namewidth > self.term_ncols - 2 {
+            let delta = (self.term_ncols as isize - 2) - self.namewidth as isize;
+            self.resize_names(delta);
+        }
     }
 
     fn move_view<T: Write>(&mut self, io: &mut T, dy: isize, dx: isize) {
@@ -303,7 +329,7 @@ impl View {
         let mut namewidth = (self.namewidth as isize) + delta;
         namewidth = max(0, namewidth); // not negative
         namewidth = min(namewidth, (self.term_ncols as isize).saturating_sub(2)); // do not exceed bounds
-        
+
         // Do not exceed longest name shown on screen
         namewidth = min(namewidth, self.aln.longest_name as isize);
         self.namewidth = namewidth.try_into().unwrap();
@@ -353,7 +379,7 @@ fn display(view: &mut View) {
     io.flush().unwrap();
 
     loop {
-        let event = event::read().unwrap(); // TODO: This will error taking stdin
+        let event = event::read().unwrap();
 
         // Break on Q or Esc
         if event == Event::Key(KeyCode::Esc.into())
@@ -481,7 +507,7 @@ fn draw_names<T: Write>(io: &mut T, view: &View) {
                 let graphemes = &view.aln.graphemes[nameindex];
                 let elide = graphemes.len() > view.namewidth as usize;
                 let namelen = min(graphemes.len(), view.namewidth as usize - elide as usize);
-                let mut name = graphemes.get_n_graphemes(namelen).to_owned();
+                let mut name = graphemes.get_n_graphemes(namelen).unwrap().to_owned();
                 if elide {
                     name.push('…')
                 } else {
@@ -512,7 +538,7 @@ fn draw_ruler<T: Write>(io: &mut T, view: &View) {
             let add = i.to_string();
             string.push_str(&add);
             string.push_str(&" ".repeat(10 - add.len()));
-        };
+        }
         let start_index = view.colstart - start;
         string[start_index..=(start_index + view.seq_ncols_display())].to_owned()
     };
@@ -522,8 +548,8 @@ fn draw_ruler<T: Write>(io: &mut T, view: &View) {
         let aln_range = view.colstart..=(view.colstart + view.seq_ncols_display() - 1);
         let mut tick_string = "┌".to_owned();
         for alncol in aln_range {
-            tick_string.push(if (alncol + 1) % 10 == 0 {'┴'} else {'─'})
-        };
+            tick_string.push(if (alncol + 1) % 10 == 0 { '┴' } else { '─' })
+        }
         tick_string
     };
 
