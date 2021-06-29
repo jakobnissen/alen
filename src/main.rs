@@ -6,7 +6,6 @@
 // To do: Implement multithreading. One thread reads input and moves view etc,
 // another draws. Drawings can be "skipped" if there are still queued inputs, perhaps?
 // To do: Possibly show deviation from consensus?
-// To do: Add search - verify input to match current alphabet when typing, and then just do findfirst? Or Regex with i?
 
 use std::cmp::{max, min};
 use std::convert::TryInto;
@@ -16,6 +15,8 @@ use std::path::Path;
 
 use bio::alphabets::Alphabet;
 use bio::io::fasta;
+
+use regex::RegexBuilder;
 
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -384,9 +385,10 @@ fn display(view: &mut View) {
     loop {
         let event = event::read().unwrap();
 
-        // Break on Q or Esc
+        // Break on Q or Esc or Control-C
         if event == Event::Key(KeyCode::Esc.into())
             || event == Event::Key(KeyCode::Char('q').into())
+            || event == Event::Key(KeyEvent{code: KeyCode::Char('c'), modifiers: event::KeyModifiers::CONTROL})
         {
             break;
         }
@@ -471,6 +473,13 @@ fn display(view: &mut View) {
                         draw_all(&mut io, view);
                     }
                 }
+
+                if kevent == (KeyEvent{code: KeyCode::Char('f'), modifiers: event::KeyModifiers::CONTROL}) {
+                    enter_search_mode(&mut io, view);
+                    draw_default_footer(&mut io, view);
+                    io.flush().unwrap();
+                };
+
             }
             Event::Resize(ncols, nrows) => {
                 view.resize(ncols, nrows);
@@ -480,8 +489,116 @@ fn display(view: &mut View) {
         };
     }
 
-    execute!(io, ResetColor, cursor::Show, terminal::LeaveAlternateScreen).unwrap();
-    terminal::disable_raw_mode().unwrap();
+    clean_terminal(&mut io);
+    std::process::exit(0);
+}
+
+fn enter_search_mode<T: Write>(io: &mut T, view: &mut View) {
+    let mut query = String::new();
+    let mut last_result = None; // we change the prompt based on the last result
+    loop {
+        draw_search_footer(io, view, &query, last_result);
+        io.flush().unwrap();
+        let event = event::read().unwrap();
+
+        // Exit on escape or Ctrl-C
+        if event == Event::Key(KeyCode::Esc.into()) || event == Event::Key(KeyEvent {code: KeyCode::Char('c'), modifiers: event::KeyModifiers::CONTROL}) {
+            break;
+        };
+
+        match event {
+            Event::Key(KeyEvent { code: KeyCode::Char(c), modifiers: _ }) => {
+                query.push(c);
+            },
+            Event::Key(KeyEvent { code: KeyCode::Backspace, modifiers: _ }) => {
+                query.pop();
+            }
+            Event::Key(KeyEvent { code: KeyCode::Enter, modifiers: _ }) => {
+                let search_result = search_query(view, &query);
+                match search_result {
+                    // Invalid result: Just continue
+                    SearchResult::RegexErr | SearchResult::NoMatch => {
+                        last_result = Some(search_result);
+                        continue
+                    },
+                    // Else, go to the correct row.
+                    SearchResult::MatchHeader(nrow) => {
+                        let dy = nrow as isize - (view.rowstart + (view.seq_nrows_display() / 2)) as isize;
+                        view.move_view(io, dy, 0);
+                        let header_row = (nrow.saturating_sub(view.rowstart) + HEADER_LINES) as u16;
+                        draw_highlight(io, header_row, 0, view.namewidth, &view.aln.graphemes[nrow].string);
+                        return
+                    },
+                    // Else go to correct seq.
+                    SearchResult::MatchSeq{row, start, stop} => {
+                        let dy = row as isize - (view.rowstart + (view.seq_nrows_display() / 2)) as isize;
+                        let dx = start as isize - (view.colstart + (view.seq_ncols_display() / 2)) as isize;
+                        view.move_view(io, dy, dx);
+                        let seq_row = (row.saturating_sub(view.rowstart) + HEADER_LINES) as u16;
+                        let seq_col = start.saturating_sub(view.colstart) as u16 + (view.namewidth + 1);
+                        let highlight_str = unsafe {
+                            std::str::from_utf8_unchecked(&view.aln.seqs[row][start..=stop])
+                        };
+                        draw_highlight(io, seq_row, seq_col, view.term_ncols, highlight_str);
+                        return
+                    }
+                }
+
+            }
+            _ => (),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum SearchResult {
+    MatchSeq{row: usize, start: usize, stop: usize},
+    MatchHeader(usize),
+    RegexErr,
+    NoMatch,
+}
+
+fn search_query(view: &View, query: &str) -> SearchResult {
+    let re = match RegexBuilder::new(query).case_insensitive(true).build() {
+        Ok(regex) => regex,
+        Err(_) => {
+            return SearchResult::RegexErr // TODO: Somehow print that it didn't work
+        }
+    };
+
+    // First search the headers
+    for (n_header, header) in view.aln.graphemes.iter().enumerate() {
+        if re.is_match(&header.string) {
+            return SearchResult::MatchHeader(n_header)
+        }
+    }
+
+    // Then search the sequences
+    for (rowno, seq) in view.aln.seqs.iter().enumerate() {
+        // We have checked on instantiation that this is OK, and do not provide
+        // any functionality to mutate the sequences
+        let string = unsafe {
+            std::str::from_utf8_unchecked(&seq)
+        };
+        if let Some(regex_match) = re.find(string) {
+            return SearchResult::MatchSeq{row: rowno, start: regex_match.start(), stop: regex_match.end()}
+        }
+    }
+    return SearchResult::NoMatch   
+}
+
+fn draw_search_footer<T: Write>(io: &mut T, view: &View, query: &str, last_result: Option<SearchResult>) {
+    let mut footer = String::from("[Esc: Quit]");
+    let (background_color, message) = match last_result {
+        None => (Color::Grey, " Enter query | "),
+        Some(SearchResult::NoMatch) => (Color::Red, " Not found | "),
+        Some(SearchResult::RegexErr) => (Color::Red, "Bad regex | "),
+        _ => panic!(), // The last two are hits - they should never happen!
+    };
+    footer.push_str(message);
+    footer.push_str(&query);
+
+    draw_footer(io, view, &footer, background_color);
 }
 
 fn draw_all<T: Write>(io: &mut T, view: &View) {
@@ -494,7 +611,7 @@ fn draw_all<T: Write>(io: &mut T, view: &View) {
     } else {
         draw_ruler(io, view);
         draw_names(io, view);
-        draw_footer(io, view);
+        draw_default_footer(io, view);
         draw_sequences(io, view);
     }
     io.flush().unwrap();
@@ -566,10 +683,19 @@ fn draw_ruler<T: Write>(io: &mut T, view: &View) {
     .unwrap();
 }
 
-fn draw_footer<T: Write>(io: &mut T, view: &View) {
+fn draw_default_footer<T: Write>(io: &mut T, view: &View) {
+    draw_footer(
+        io,
+        view,
+        "q/Esc: Quit   ←/→/↑/↓ + None/Shift/Ctrl: Move alignment   ./,: Adjust names",
+        Color::Grey
+    )
+}
+
+fn draw_footer<T: Write>(io: &mut T, view: &View, text: &str, background: Color) {
     // First we create the full footer, then we truncate, if needed
-    let mut footer =
-        String::from("q/Esc: Quit   ←/→/↑/↓ + None/Shift/Ctrl: Move alignment   ./,: Adjust names");
+    let mut footer = text.to_owned();
+
     // Pad or truncate footer to match num columns
     let nchars = footer.chars().count();
     let ncols = view.term_ncols as usize;
@@ -584,7 +710,7 @@ fn draw_footer<T: Write>(io: &mut T, view: &View) {
 
     queue!(
         io,
-        SetBackgroundColor(Color::Grey),
+        SetBackgroundColor(background),
         SetForegroundColor(Color::Black),
         cursor::MoveTo(0, (view.term_nrows - 1) as u16),
         Print(footer),
@@ -639,6 +765,38 @@ fn draw_sequences<T: Write>(io: &mut T, view: &View) {
     }
 
     queue!(io, ResetColor,).unwrap();
+}
+
+fn draw_highlight<T: Write>(io: &mut T, screenrow: u16, screencol: u16, maxcols: u16, text: &str) {
+    let max_len = (maxcols - screencol) as usize;
+    let truncated = if text.len() > max_len {
+        if text.is_ascii() {
+            &text[0..max_len]
+        } else {
+            let lastindex = if let Some((index, _)) = UnicodeSegmentation::grapheme_indices(text, true).nth(max_len) {
+                index - 1
+            } else {
+                text.len()
+            };
+            &text[0..=lastindex]
+        }
+    } else {
+        text
+    };
+    queue!(
+        io,
+        SetBackgroundColor(Color::White),
+        SetForegroundColor(Color::Black),
+        cursor::MoveTo(screencol, screenrow),
+        Print(truncated),
+        ResetColor,
+    )
+    .unwrap();
+}
+
+fn clean_terminal<T: Write>(io: &mut T) {
+    execute!(io, ResetColor, cursor::Show, terminal::LeaveAlternateScreen).unwrap();
+    terminal::disable_raw_mode().unwrap();
 }
 
 fn main() {
