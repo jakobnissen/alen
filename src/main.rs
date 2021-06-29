@@ -480,6 +480,12 @@ fn display(view: &mut View) {
                     io.flush().unwrap();
                 };
 
+                if kevent == (KeyEvent{code: KeyCode::Char('j'), modifiers: event::KeyModifiers::CONTROL}) {
+                    enter_jumpcol_mode(&mut io, view);
+                    draw_default_footer(&mut io, view);
+                    io.flush().unwrap();
+                };
+
             }
             Event::Resize(ncols, nrows) => {
                 view.resize(ncols, nrows);
@@ -491,6 +497,63 @@ fn display(view: &mut View) {
 
     clean_terminal(&mut io);
     std::process::exit(0);
+}
+
+
+// TODO: Refactor - this and search mode? Perhaps:
+//
+fn enter_jumpcol_mode<T: Write>(io: &mut T, view: &mut View) {
+    let mut query = String::new();
+    let mut invalid_column = false;
+    loop {
+        draw_jump_footer(io, &query, &view, invalid_column);
+        io.flush().unwrap();
+        let event = event::read().unwrap();
+
+        if event == Event::Key(KeyCode::Esc.into()) || event == Event::Key(KeyEvent {code: KeyCode::Char('c'), modifiers: event::KeyModifiers::CONTROL}) {
+            break;
+        };
+
+        match event {
+            Event::Key(KeyEvent { code: KeyCode::Char(c), modifiers: _ }) => {
+                match c {
+                    '0'..='9' => query.push(c),
+                    _ => (),
+                }
+            },
+            Event::Key(KeyEvent { code: KeyCode::Backspace, modifiers: _ }) => {
+                query.pop();
+            },
+            Event::Key(KeyEvent { code: KeyCode::Enter, modifiers: _ }) => {
+                match query.parse::<usize>() {
+                    Ok(n) => {
+                        if n < 1 || n > view.aln.ncols() {
+                            invalid_column = true;
+                        } else {
+                            view.move_view(io, 0, n as isize - view.colstart as isize);
+                            break
+                        }
+                    },
+                    Err(_) => {
+                        panic!(); // should never happen, since we only accept numerical inputs
+                    }
+                }
+            }
+            _ => ()
+        }
+    }
+}
+
+fn draw_jump_footer<T: Write>(io: &mut T, query: &str, view: &View, invalid_column: bool) {
+    let mut text = "[Esc: Quit] ".to_owned();
+    text.push_str(if invalid_column {
+        "Invalid number: "
+    } else {
+        "Jump to column: "
+    });
+    let background_color = if invalid_column { Color::Red } else { Color::Grey };
+    text.push_str(query);
+    draw_footer(io, view, &text, background_color)
 }
 
 fn enter_search_mode<T: Write>(io: &mut T, view: &mut View) {
@@ -537,7 +600,7 @@ fn enter_search_mode<T: Write>(io: &mut T, view: &mut View) {
                         let seq_row = (row.saturating_sub(view.rowstart) + HEADER_LINES) as u16;
                         let seq_col = start.saturating_sub(view.colstart) as u16 + (view.namewidth + 1);
                         let highlight_str = unsafe {
-                            std::str::from_utf8_unchecked(&view.aln.seqs[row][start..=stop])
+                            std::str::from_utf8_unchecked(&view.aln.seqs[row][start..stop])
                         };
                         draw_highlight(io, seq_row, seq_col, view.term_ncols, highlight_str);
                         return
@@ -687,7 +750,7 @@ fn draw_default_footer<T: Write>(io: &mut T, view: &View) {
     draw_footer(
         io,
         view,
-        "q/Esc: Quit   ←/→/↑/↓ + None/Shift/Ctrl: Move alignment   ./,: Adjust names",
+        "q/Esc: Quit   ←/→/↑/↓ + None/Shift/Ctrl: Move alignment   ./,: Adjust names   Ctrl+f: Find    Ctrl+j Jump",
         Color::Grey
     )
 }

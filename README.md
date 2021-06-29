@@ -19,5 +19,16 @@ $ alen /path/to/alignment.fasta
 
 Note that Alen loads in the entire alignment in memory, so don't use it for multi-gigabyte files. Alen will auto-detect whether the alignment is protein or amino acid alignments. For more help, type `alen --help` in the terminal.
 
+__Commands__
+
+* `Ctrl-f`: Search. Searches headers, then sequences for regex, case insensitively.
+* `Ctrl-j`: Jump to column.
+* `Arrow keys`: Move 1 column/row
+* `Shift-Arrow keys`: Move 10 columns/rows
+* `Ctrl-Arrow keys`: Move to first/last column/row
+
+### Configuration
+No.
+
 ### Why the name?
 First, it's to pun on the unimaginative named [alan](https://github.com/mpdunne/alan) and [alv](https://github.com/arvestad/alv). Second, _alen_ means _cubit_ in Danish. Like using cubits, Alen is simple, crude, but usually _good enough_.
