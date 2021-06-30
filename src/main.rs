@@ -2,7 +2,6 @@
 // To do: Factorize to files
 // To do: More formats?
 // To do: Make stdin work on MacOS
-// To do: Jump to column?
 // To do: Implement multithreading. One thread reads input and moves view etc,
 // another draws. Drawings can be "skipped" if there are still queued inputs, perhaps?
 // To do: Possibly show deviation from consensus?
@@ -483,6 +482,11 @@ fn display(view: &mut View) {
                 if kevent == (KeyEvent{code: KeyCode::Char('j'), modifiers: event::KeyModifiers::CONTROL}) {
                     enter_jumpcol_mode(&mut io, view);
                     draw_default_footer(&mut io, view);
+                    io.flush().unwrap();
+                };
+
+                if kevent == (KeyEvent{code: KeyCode::Char('r'), modifiers: event::KeyModifiers::NONE}) {
+                    draw_all(&mut io, view);
                     io.flush().unwrap();
                 };
 

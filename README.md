@@ -21,6 +21,8 @@ Note that Alen loads in the entire alignment in memory, so don't use it for mult
 
 __Commands__
 
+* `Esc / q / Control-C`: Quit
+* `r`: Re-render the screen.
 * `Ctrl-f`: Search. Searches headers, then sequences for regex, case insensitively.
 * `Ctrl-j`: Jump to column.
 * `Arrow keys`: Move 1 column/row
