@@ -1,4 +1,3 @@
-// To do: Better error handling in general
 // To do: More formats?
 // To do: Make stdin work on MacOS
 // To do: Implement multithreading. One thread reads input and moves view etc,
@@ -12,8 +11,10 @@ use constants::HEADER_LINES;
 use data::View;
 
 use std::cmp::min;
-use std::io::{BufReader, Write};
+use std::io::{stdout, BufReader, Write};
 use std::path::Path;
+
+use anyhow::Result;
 
 use regex::RegexBuilder;
 
@@ -27,7 +28,7 @@ use crossterm::{
     terminal::{self, ClearType},
 };
 
-fn move_view_and_redraw<T: Write>(view: &mut View, io: &mut T, dy: isize, dx: isize) {
+fn move_view_and_redraw<T: Write>(view: &mut View, io: &mut T, dy: isize, dx: isize) -> Result<()> {
     let old_rowstart = view.rowstart;
     let old_colstart = view.colstart;
 
@@ -35,17 +36,18 @@ fn move_view_and_redraw<T: Write>(view: &mut View, io: &mut T, dy: isize, dx: is
 
     // Only update the view if the view was actually moved.
     if view.rowstart != old_rowstart {
-        draw_names(io, view);
-        io.flush().unwrap();
+        draw_names(io, view)?;
+        io.flush()?;
     }
     if view.colstart != old_colstart {
-        draw_ruler(io, view);
-        io.flush().unwrap();
+        draw_ruler(io, view)?;
+        io.flush()?;
     }
     if view.rowstart != old_rowstart || view.colstart != old_colstart {
-        draw_sequences(io, view);
-        io.flush().unwrap();
+        draw_sequences(io, view)?;
+        io.flush()?;
     }
+    Ok(())
 }
 
 fn get_color_background_dna(byte: u8) -> Option<Color> {
@@ -94,16 +96,14 @@ fn get_color_background_aa(byte: u8) -> Option<Color> {
     }
 }
 
-fn display(view: &mut View) {
-    let mut io = std::io::stdout();
-    terminal::enable_raw_mode().unwrap();
-    execute!(io, terminal::EnterAlternateScreen, cursor::Hide,).unwrap();
-
-    draw_all(&mut io, view);
-    io.flush().unwrap();
+fn display<T: Write>(io: &mut T, view: &mut View) -> Result<()> {
+    terminal::enable_raw_mode()?;
+    execute!(io, terminal::EnterAlternateScreen, cursor::Hide,)?;
+    draw_all(io, view)?;
+    io.flush()?;
 
     loop {
-        let event = event::read().unwrap();
+        let event = event::read()?;
 
         // Break on Q or Esc or Control-C
         if event == Event::Key(KeyCode::Esc.into())
@@ -175,7 +175,7 @@ fn display(view: &mut View) {
                     _ => None,
                 };
                 if let Some((dy, dx)) = delta {
-                    move_view_and_redraw(view, &mut io, dy, dx);
+                    move_view_and_redraw(view, io, dy, dx)?;
                 };
                 let name_move = match kevent {
                     KeyEvent {
@@ -194,7 +194,7 @@ fn display(view: &mut View) {
                     let old_namewidth = view.namewidth;
                     view.resize_names(delta);
                     if old_namewidth != view.namewidth {
-                        draw_all(&mut io, view);
+                        draw_all(io, view)?;
                     }
                 }
 
@@ -204,9 +204,9 @@ fn display(view: &mut View) {
                         modifiers: event::KeyModifiers::CONTROL,
                     })
                 {
-                    enter_search_mode(&mut io, view);
-                    draw_default_footer(&mut io, view);
-                    io.flush().unwrap();
+                    enter_search_mode(io, view)?;
+                    draw_default_footer(io, view)?;
+                    io.flush()?;
                 };
 
                 if kevent
@@ -215,9 +215,9 @@ fn display(view: &mut View) {
                         modifiers: event::KeyModifiers::CONTROL,
                     })
                 {
-                    enter_jumpcol_mode(&mut io, view);
-                    draw_default_footer(&mut io, view);
-                    io.flush().unwrap();
+                    enter_jumpcol_mode(io, view)?;
+                    draw_default_footer(io, view)?;
+                    io.flush()?;
                 };
 
                 if kevent
@@ -226,31 +226,28 @@ fn display(view: &mut View) {
                         modifiers: event::KeyModifiers::NONE,
                     })
                 {
-                    draw_all(&mut io, view);
-                    io.flush().unwrap();
+                    draw_all(io, view)?;
+                    io.flush()?;
                 };
             }
             Event::Resize(ncols, nrows) => {
                 view.resize(ncols, nrows);
-                draw_all(&mut io, view);
+                draw_all(io, view)?;
             }
             _ => (),
         };
     }
-
-    clean_terminal(&mut io);
-    std::process::exit(0);
+    Ok(())
 }
 
-// TODO: Refactor - this and search mode? Perhaps:
-//
-fn enter_jumpcol_mode<T: Write>(io: &mut T, view: &mut View) {
+// TODO: Refactor - this and search mode?
+fn enter_jumpcol_mode<T: Write>(io: &mut T, view: &mut View) -> Result<()> {
     let mut query = String::new();
     let mut invalid_column = false;
     loop {
-        draw_jump_footer(io, &query, view, invalid_column);
-        io.flush().unwrap();
-        let event = event::read().unwrap();
+        draw_jump_footer(io, &query, view, invalid_column)?;
+        io.flush()?;
+        let event = event::read()?;
 
         if event == Event::Key(KeyCode::Esc.into())
             || event
@@ -292,21 +289,27 @@ fn enter_jumpcol_mode<T: Write>(io: &mut T, view: &mut View) {
                                 io,
                                 0,
                                 n as isize - view.colstart as isize - 1,
-                            );
+                            )?;
                             break;
                         }
                     }
                     Err(_) => {
-                        panic!(); // should never happen, since we only accept numerical inputs
+                        unreachable!(); // should never happen, since we only accept numerical inputs
                     }
                 }
             }
             _ => (),
         }
     }
+    Ok(())
 }
 
-fn draw_jump_footer<T: Write>(io: &mut T, query: &str, view: &View, invalid_column: bool) {
+fn draw_jump_footer<T: Write>(
+    io: &mut T,
+    query: &str,
+    view: &View,
+    invalid_column: bool,
+) -> Result<()> {
     let mut text = "[Esc: Quit] ".to_owned();
     text.push_str(if invalid_column {
         "Invalid number: "
@@ -319,18 +322,19 @@ fn draw_jump_footer<T: Write>(io: &mut T, query: &str, view: &View, invalid_colu
         Color::Grey
     };
     text.push_str(query);
-    draw_footer(io, view, &text, background_color)
+    draw_footer(io, view, &text, background_color)?;
+    Ok(())
 }
 
-fn enter_search_mode<T: Write>(io: &mut T, view: &mut View) {
+fn enter_search_mode<T: Write>(io: &mut T, view: &mut View) -> Result<()> {
     let mut query = String::new();
     let mut last_result = None; // we change the prompt based on the last result
     loop {
-        draw_search_footer(io, view, &query, last_result);
-        io.flush().unwrap();
-        let event = event::read().unwrap();
+        draw_search_footer(io, view, &query, last_result)?;
+        io.flush()?;
+        let event = event::read()?;
 
-        // Exit on escape or Ctrl-C
+        // Quit on escape or Ctrl-C
         if event == Event::Key(KeyCode::Esc.into())
             || event
                 == Event::Key(KeyEvent {
@@ -369,7 +373,7 @@ fn enter_search_mode<T: Write>(io: &mut T, view: &mut View) {
                     SearchResult::MatchHeader(nrow) => {
                         let dy = nrow as isize
                             - (view.rowstart + (view.seq_nrows_display() / 2)) as isize;
-                        move_view_and_redraw(view, io, dy, 0);
+                        move_view_and_redraw(view, io, dy, 0)?;
                         let header_row = (nrow.saturating_sub(view.rowstart) + HEADER_LINES) as u16;
                         draw_highlight(
                             io,
@@ -377,8 +381,8 @@ fn enter_search_mode<T: Write>(io: &mut T, view: &mut View) {
                             0,
                             view.namewidth,
                             &view.graphemes()[nrow].string,
-                        );
-                        return;
+                        )?;
+                        return Ok(());
                     }
                     // Else go to correct seq.
                     SearchResult::MatchSeq { row, start, stop } => {
@@ -386,21 +390,22 @@ fn enter_search_mode<T: Write>(io: &mut T, view: &mut View) {
                             - (view.rowstart + (view.seq_nrows_display() / 2)) as isize;
                         let dx = start as isize
                             - (view.colstart + (view.seq_ncols_display() / 2)) as isize;
-                        move_view_and_redraw(view, io, dy, dx);
+                        move_view_and_redraw(view, io, dy, dx)?;
                         let seq_row = (row.saturating_sub(view.rowstart) + HEADER_LINES) as u16;
                         let seq_col =
                             start.saturating_sub(view.colstart) as u16 + (view.namewidth + 1);
                         let highlight_str = unsafe {
                             std::str::from_utf8_unchecked(&view.seqs()[row][start..stop])
                         };
-                        draw_highlight(io, seq_row, seq_col, view.term_ncols, highlight_str);
-                        return;
+                        draw_highlight(io, seq_row, seq_col, view.term_ncols, highlight_str)?;
+                        return Ok(());
                     }
                 }
             }
             _ => (),
         }
     }
+    Ok(())
 }
 
 #[derive(Clone, Copy)]
@@ -451,37 +456,37 @@ fn draw_search_footer<T: Write>(
     view: &View,
     query: &str,
     last_result: Option<SearchResult>,
-) {
+) -> Result<()> {
     let mut footer = String::from("[Esc: Quit]");
     let (background_color, message) = match last_result {
         None => (Color::Grey, " Enter query | "),
         Some(SearchResult::NoMatch) => (Color::Red, " Not found | "),
         Some(SearchResult::RegexErr) => (Color::Red, " Bad regex | "),
-        _ => panic!(), // The last two are hits - they should never happen!
+        _ => unreachable!(), // The last two are hits - they should never happen!
     };
     footer.push_str(message);
     footer.push_str(query);
 
-    draw_footer(io, view, &footer, background_color);
+    draw_footer(io, view, &footer, background_color)
 }
 
-fn draw_all<T: Write>(io: &mut T, view: &View) {
-    execute!(io, ResetColor, terminal::Clear(ClearType::All),).unwrap();
+fn draw_all<T: Write>(io: &mut T, view: &View) -> Result<()> {
+    execute!(io, ResetColor, terminal::Clear(ClearType::All),)?;
 
     if view.term_ncols < 2 || view.term_nrows < 4 {
         // This seems silly, but I have it because it allows me to assume a minimal
         // terminal size when drawing the regular alignment
-        execute!(io, cursor::MoveTo(0, 0), Print(":("),).unwrap();
+        execute!(io, cursor::MoveTo(0, 0), Print(":("),)?;
     } else {
-        draw_ruler(io, view);
-        draw_names(io, view);
-        draw_default_footer(io, view);
-        draw_sequences(io, view);
+        draw_ruler(io, view)?;
+        draw_names(io, view)?;
+        draw_default_footer(io, view)?;
+        draw_sequences(io, view)?;
     }
-    io.flush().unwrap();
+    Ok(io.flush()?)
 }
 
-fn draw_names<T: Write>(io: &mut T, view: &View) {
+fn draw_names<T: Write>(io: &mut T, view: &View) -> Result<()> {
     if let Some(range) = view.seq_row_range() {
         for (i, nameindex) in range.into_iter().enumerate() {
             let termrow = (i + HEADER_LINES) as u16;
@@ -506,13 +511,13 @@ fn draw_names<T: Write>(io: &mut T, view: &View) {
                 Print(name),
                 cursor::MoveTo(view.namewidth, termrow),
                 Print('│'),
-            )
-            .unwrap();
+            )?;
         }
     }
+    Ok(())
 }
 
-fn draw_ruler<T: Write>(io: &mut T, view: &View) {
+fn draw_ruler<T: Write>(io: &mut T, view: &View) -> Result<()> {
     // Make the top line with the numbers.
     let num_string = {
         let mut string = String::new();
@@ -537,17 +542,16 @@ fn draw_ruler<T: Write>(io: &mut T, view: &View) {
         tick_string
     };
 
-    queue!(
+    Ok(queue!(
         io,
         cursor::MoveTo(view.namewidth, 0),
         Print(num_string),
         cursor::MoveTo(view.namewidth, 1),
         Print(tick_string),
-    )
-    .unwrap();
+    )?)
 }
 
-fn draw_default_footer<T: Write>(io: &mut T, view: &View) {
+fn draw_default_footer<T: Write>(io: &mut T, view: &View) -> Result<()> {
     draw_footer(
         io,
         view,
@@ -556,7 +560,7 @@ fn draw_default_footer<T: Write>(io: &mut T, view: &View) {
     )
 }
 
-fn draw_footer<T: Write>(io: &mut T, view: &View, text: &str, background: Color) {
+fn draw_footer<T: Write>(io: &mut T, view: &View, text: &str, background: Color) -> Result<()> {
     // First we create the full footer, then we truncate, if needed
     let mut footer = text.to_owned();
 
@@ -572,35 +576,34 @@ fn draw_footer<T: Write>(io: &mut T, view: &View, text: &str, background: Color)
         footer.push_str(" ".repeat(ncols - nchars).as_str())
     }
 
-    queue!(
+    Ok(queue!(
         io,
         SetBackgroundColor(background),
         SetForegroundColor(Color::Black),
         cursor::MoveTo(0, (view.term_nrows - 1) as u16),
         Print(footer),
         ResetColor,
-    )
-    .unwrap();
+    )?)
 }
 
 // This function is the performance bottleneck, so I try to queue as little as
 // possible to the terminal by checking every single operation to see if it's
 // necessary
-fn draw_sequences<T: Write>(io: &mut T, view: &View) {
+fn draw_sequences<T: Write>(io: &mut T, view: &View) -> Result<()> {
     let row_range = match view.seq_row_range() {
         Some(n) => n,
-        None => return,
+        None => return Ok(()),
     };
     let col_range = match view.seq_col_range() {
         Some(n) => n,
-        None => return,
+        None => return Ok(()),
     };
 
     let mut oldcolor: Option<Color> = None;
     let mut is_foreground_black = false;
     for (i, alnrow) in row_range.enumerate() {
         let termrow = (i + HEADER_LINES) as u16;
-        queue!(io, cursor::MoveTo(view.namewidth + 1, termrow),).unwrap();
+        queue!(io, cursor::MoveTo(view.namewidth + 1, termrow),)?;
         for byte in view.seqs()[alnrow][col_range.clone()].iter() {
             let color = if view.is_aa() {
                 get_color_background_aa(*byte)
@@ -613,25 +616,31 @@ fn draw_sequences<T: Write>(io: &mut T, view: &View) {
                 if let Some(clr) = color {
                     // only set foreground to black if it isn't already
                     if !is_foreground_black {
-                        queue!(io, SetForegroundColor(Color::Black)).unwrap();
+                        queue!(io, SetForegroundColor(Color::Black))?;
                         is_foreground_black = true;
                     };
-                    queue!(io, SetBackgroundColor(clr)).unwrap();
+                    queue!(io, SetBackgroundColor(clr))?;
                 // Otherwise, reset to default color scheme
                 } else {
-                    queue!(io, ResetColor).unwrap();
+                    queue!(io, ResetColor)?;
                     is_foreground_black = false;
                 }
             };
-            queue!(io, Print(*byte as char)).unwrap();
+            queue!(io, Print(*byte as char))?;
             oldcolor = color;
         }
     }
 
-    queue!(io, ResetColor,).unwrap();
+    Ok(queue!(io, ResetColor,)?)
 }
 
-fn draw_highlight<T: Write>(io: &mut T, screenrow: u16, screencol: u16, maxcols: u16, text: &str) {
+fn draw_highlight<T: Write>(
+    io: &mut T,
+    screenrow: u16,
+    screencol: u16,
+    maxcols: u16,
+    text: &str,
+) -> Result<()> {
     let max_len = (maxcols - screencol) as usize;
     let truncated = if text.len() > max_len {
         if text.is_ascii() {
@@ -649,20 +658,19 @@ fn draw_highlight<T: Write>(io: &mut T, screenrow: u16, screencol: u16, maxcols:
     } else {
         text
     };
-    queue!(
+    Ok(queue!(
         io,
         SetBackgroundColor(Color::White),
         SetForegroundColor(Color::Black),
         cursor::MoveTo(screencol, screenrow),
         Print(truncated),
         ResetColor,
-    )
-    .unwrap();
+    )?)
 }
 
-fn clean_terminal<T: Write>(io: &mut T) {
-    execute!(io, ResetColor, cursor::Show, terminal::LeaveAlternateScreen).unwrap();
-    terminal::disable_raw_mode().unwrap();
+fn clean_terminal<T: Write>(io: &mut T) -> Result<()> {
+    execute!(io, ResetColor, cursor::Show, terminal::LeaveAlternateScreen)?;
+    Ok(terminal::disable_raw_mode()?)
 }
 
 fn main() {
@@ -697,10 +705,27 @@ fn main() {
         println!("ERROR: Filename not found: \"{}\"", filename);
         std::process::exit(1);
     }
+    let file = std::fs::File::open(filename).unwrap_or_else(|err| {
+        println!("ERROR reading file: {}", err);
+        std::process::exit(1)
+    });
 
-    let buffered_io = BufReader::new(std::fs::File::open(filename).unwrap());
+    let buffered_io = BufReader::new(file);
     let uppercase = args.is_present("uppercase");
     let must_aa = args.is_present("aminoacids");
-    let mut view = View::from_reader(BufReader::new(buffered_io), uppercase, must_aa);
-    display(&mut view);
+    let view = View::from_reader(BufReader::new(buffered_io), uppercase, must_aa);
+    match view {
+        Err(e) => {
+            println!("ERROR when loading FASTA: {}", e);
+            std::process::exit(1);
+        }
+        Ok(mut view) => {
+            let mut io = stdout();
+            if let Err(e) = display(&mut io, &mut view) {
+                println!("Error: {}", e);
+            }
+            clean_terminal(&mut io).unwrap();
+            std::process::exit(0);
+        }
+    }
 }

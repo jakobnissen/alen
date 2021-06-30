@@ -5,6 +5,8 @@ use std::convert::TryInto;
 use std::io::BufRead;
 use std::ops::RangeInclusive;
 
+use anyhow::{anyhow, Result};
+
 use unicode_segmentation::UnicodeSegmentation;
 
 use crossterm::terminal;
@@ -16,7 +18,6 @@ use bio::io::fasta;
 /// with uniform width.
 /// The point of this struct is to avoid doing grapheme computations on ASCII
 /// strings, and to only compute grapheme offsets once for each string.
-
 pub struct Graphemes {
     pub string: String,
     /// If the string is ASCII (it usually is), we don't bother saving this.
@@ -56,7 +57,7 @@ impl Graphemes {
     /// Number of graphemes in string.
     pub fn len(&self) -> usize {
         match &self.grapheme_stop_indices {
-            None => self.string.len(),
+            None => self.string.len(), // if is ASCII
             Some(n) => n.len(),
         }
     }
@@ -81,8 +82,8 @@ impl Graphemes {
     }
 }
 
-/// Panics if not valid biosequence, else returns true (aa) or false (dna)
-fn verify_alphabet(seqs: &[Vec<u8>], graphemes_vec: &[Graphemes], must_aa: bool) -> bool {
+// Returns whether it's an AA alphabet, else it default to DNA.
+fn verify_alphabet(seqs: &[Vec<u8>], graphemes_vec: &[Graphemes], must_aa: bool) -> Result<bool> {
     let dna_alphabet = Alphabet::new(b"-ACMGRSVTUWYHKDBNacmgrsvtuwyhkdbn");
     let aa_alphabet = Alphabet::new(b"*-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz");
 
@@ -91,16 +92,14 @@ fn verify_alphabet(seqs: &[Vec<u8>], graphemes_vec: &[Graphemes], must_aa: bool)
         if !must_aa && valid_dna {
             valid_dna &= dna_alphabet.is_word(seq);
         }
-        // DNA alphabet is a subset of AA alphabet, so we panic if it can't even be AA
         if !aa_alphabet.is_word(seq) {
-            println!(
-                "ERROR:Sequence \"{}\" cannot be understood as amino acids.",
+            return Err(anyhow!(
+                "Sequence \"{}\" cannot be understood as amino acids.",
                 graphemes.string
-            );
-            std::process::exit(1);
+            ));
         }
     }
-    must_aa | !valid_dna
+    Ok(must_aa | !valid_dna)
 }
 
 fn make_uppercase(seqs: &mut [Vec<u8>]) {
@@ -131,42 +130,36 @@ impl Alignment {
         self.seqs[0].len()
     }
 
-    fn new<T: BufRead>(file: T, uppercase: bool, must_aa: bool) -> Alignment {
+    fn new<T: BufRead>(file: T, uppercase: bool, must_aa: bool) -> Result<Alignment> {
         let mut seqs = Vec::new();
         let mut graphemes: Vec<Graphemes> = Vec::new();
         let reader = fasta::Reader::new(file);
         let mut seqlength: Option<usize> = None;
         for result in reader.records() {
-            let record = match result {
-                Ok(r) => r,
-                Err(e) => {
-                    println!("ERROR: During FASTA parsing, found error:");
-                    println!("{:?}", e);
-                    std::process::exit(1);
-                }
-            };
+            let record = result?;
+            let header = Graphemes::new(record.id());
             let seq = record.seq().iter().copied().collect::<Vec<_>>();
 
             // Check identical sequence lengths
             if let Some(len) = seqlength {
                 if seq.len() != len {
-                    println!(
-                        "ERROR: Not all input sequences are the same length. \
-                    Expected sequence length {}, found {}.",
+                    return Err(anyhow!(
+                        "Not all input sequences are the same length. \
+                    Expected sequence length {}, seq \"{}\" has length {}.",
                         len,
+                        &header.string,
                         seq.len()
-                    );
-                    std::process::exit(1);
+                    ));
                 }
             } else {
                 seqlength = Some(seq.len())
             }
+            graphemes.push(header);
             seqs.push(seq);
-            graphemes.push(Graphemes::new(record.id()));
         }
 
         // Verify alphabet
-        let is_aa = verify_alphabet(&seqs, &graphemes, must_aa);
+        let is_aa = verify_alphabet(&seqs, &graphemes, must_aa)?;
 
         // Turn uppercase if requested
         if uppercase {
@@ -174,17 +167,16 @@ impl Alignment {
         }
 
         if seqlength.map_or(true, |i| i < 1) {
-            println!("ERROR: Alignment has zero sequences, or has length 0.");
-            std::process::exit(1);
+            return Err(anyhow!("Alignment has no seqs, or seqs have length 0."));
         }
 
         let longest_name = graphemes.iter().map(|v| v.len()).max().unwrap();
-        Alignment {
+        Ok(Alignment {
             graphemes,
             longest_name,
             seqs,
             is_aa,
-        }
+        })
     }
 }
 
@@ -228,8 +220,8 @@ impl View {
         view
     }
 
-    pub fn from_reader<T: BufRead>(file: T, uppercase: bool, must_aa: bool) -> View {
-        View::new(Alignment::new(file, uppercase, must_aa))
+    pub fn from_reader<T: BufRead>(file: T, uppercase: bool, must_aa: bool) -> Result<View> {
+        Ok(View::new(Alignment::new(file, uppercase, must_aa)?))
     }
 
     pub fn graphemes(&self) -> &Vec<Graphemes> {
