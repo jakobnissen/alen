@@ -1,9 +1,9 @@
-use crate::constants::{HEADER_LINES, FOOTER_LINES};
+use crate::constants::{FOOTER_LINES, HEADER_LINES};
 
-use std::io::BufRead;
 use std::cmp::{max, min};
-use std::ops::RangeInclusive;
 use std::convert::TryInto;
+use std::io::BufRead;
+use std::ops::RangeInclusive;
 
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -187,7 +187,6 @@ impl Alignment {
         }
     }
 }
-
 
 fn calculate_start(current: usize, delta: isize, displaysize: usize, n_rows_cols: usize) -> usize {
     let last_index = n_rows_cols.saturating_sub(displaysize);
