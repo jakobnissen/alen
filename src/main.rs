@@ -1,19 +1,19 @@
 // To do: Better error handling in general
-// To do: Factorize to files
 // To do: More formats?
 // To do: Make stdin work on MacOS
 // To do: Implement multithreading. One thread reads input and moves view etc,
 // another draws. Drawings can be "skipped" if there are still queued inputs, perhaps?
 // To do: Possibly show deviation from consensus?
 
-use std::cmp::{max, min};
-use std::convert::TryInto;
-use std::io::{BufRead, BufReader, Write};
-use std::ops::RangeInclusive;
-use std::path::Path;
+mod data;
+mod constants;
 
-use bio::alphabets::Alphabet;
-use bio::io::fasta;
+use data::View;
+use constants::HEADER_LINES;
+
+use std::cmp::min;
+use std::io::{BufReader, Write};
+use std::path::Path;
 
 use regex::RegexBuilder;
 
@@ -27,38 +27,24 @@ use crossterm::{
     terminal::{self, ClearType},
 };
 
-const HEADER_LINES: usize = 2;
-const FOOTER_LINES: usize = 1;
+fn move_view_and_redraw<T: Write>(view: &mut View, io: &mut T, dy: isize, dx: isize) {
+    let old_rowstart = view.rowstart;
+    let old_colstart = view.colstart;
 
-/// Panics if not valid biosequence, else returns true (aa) or false (dna)
-fn verify_alphabet(seqs: &[Vec<u8>], graphemes_vec: &[Graphemes], must_aa: bool) -> bool {
-    let dna_alphabet = Alphabet::new(b"-ACMGRSVTUWYHKDBNacmgrsvtuwyhkdbn");
-    let aa_alphabet = Alphabet::new(b"*-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz");
+    view.move_view(dy, dx);
 
-    let mut valid_dna = true;
-    for (seq, graphemes) in seqs.iter().zip(graphemes_vec) {
-        if !must_aa && valid_dna {
-            valid_dna &= dna_alphabet.is_word(seq);
-        }
-        // DNA alphabet is a subset of AA alphabet, so we panic if it can't even be AA
-        if !aa_alphabet.is_word(seq) {
-            println!(
-                "ERROR:Sequence \"{}\" cannot be understood as amino acids.",
-                graphemes.string
-            );
-            std::process::exit(1);
-        }
+    // Only update the view if the view was actually moved.
+    if view.rowstart != old_rowstart {
+        draw_names(io, view);
+        io.flush().unwrap();
     }
-    must_aa | !valid_dna
-}
-
-fn make_uppercase(seqs: &mut [Vec<u8>]) {
-    // We exploit the fact that only [A-Za-z\-\*] is allowed. Uppercasing this
-    // means setting the third-to-top bit to 0. For - or *, we don't change the bit.
-    for seq in seqs.iter_mut() {
-        for byte in seq.iter_mut() {
-            *byte &= !(((*byte >= b'A') as u8) << 5)
-        }
+    if view.colstart != old_colstart {
+        draw_ruler(io, view);
+        io.flush().unwrap();
+    }
+    if view.rowstart != old_rowstart || view.colstart != old_colstart {
+        draw_sequences(io, view);
+        io.flush().unwrap();
     }
 }
 
@@ -105,271 +91,6 @@ fn get_color_background_aa(byte: u8) -> Option<Color> {
         b'p' | b'P' => Some(Color::AnsiValue(114)),
         b'g' | b'G' => Some(Color::AnsiValue(149)),
         _ => None,
-    }
-}
-
-/// A string that is separated into its constituent graphemes, used for printing
-/// with uniform width.
-/// The point of this struct is to avoid doing grapheme computations on ASCII
-/// strings, and to only compute grapheme offsets once for each string.
-
-struct Graphemes {
-    string: String,
-    /// If the string is ASCII (it usually is), we don't bother saving this.
-    grapheme_stop_indices: Option<Vec<usize>>,
-}
-
-impl Graphemes {
-    fn new(st: &str) -> Graphemes {
-        let string = st.to_owned();
-        // If string is ASCII, we save only the string itself, and don't bother
-        // to do grapheme identification, since 1 grapheme == 1 byte == 1 char
-        let grapheme_stop_indices = if string.is_ascii() {
-            None
-        } else {
-            // Else we add in the LAST byte of each graphemes in vector V,
-            // such that the first N graphemes of the string are encoded by
-            // the bytes 0..=V[N-1].
-            Some({
-                let mut v: Vec<usize> =
-                    UnicodeSegmentation::grapheme_indices(string.as_str(), true)
-                        .skip(1)
-                        // The iterator gives start indices, I assume end indices of the
-                        // previous grapheme is the previous byte
-                        .map(|(index, _grapheme)| index - 1)
-                        .collect();
-                // End byte of last grapheme is just the last byte-index of the string
-                v.push(string.len());
-                v
-            })
-        };
-        Graphemes {
-            string,
-            grapheme_stop_indices,
-        }
-    }
-
-    /// Number of graphemes in string.
-    fn len(&self) -> usize {
-        match &self.grapheme_stop_indices {
-            None => self.string.len(),
-            Some(n) => n.len(),
-        }
-    }
-
-    /// Get a string slice with the first N graphemes. If N is out of bounds,
-    /// returns None.
-    fn get_n_graphemes(&self, n: usize) -> Option<&str> {
-        if n > self.len() {
-            None
-        } else {
-            match &self.grapheme_stop_indices {
-                None => Some(&self.string[0..n]),
-                Some(v) => {
-                    if n == 0 {
-                        Some("")
-                    } else {
-                        Some(&self.string[0..=v[n - 1]])
-                    }
-                }
-            }
-        }
-    }
-}
-
-struct Alignment {
-    graphemes: Vec<Graphemes>,
-    // longest as in number of graphemes. We cache this for efficiency, it can be
-    // computed from the graphemes field easily
-    longest_name: usize,
-    seqs: Vec<Vec<u8>>,
-    is_aa: bool,
-}
-
-impl Alignment {
-    fn nrows(&self) -> usize {
-        self.seqs.len()
-    }
-
-    fn ncols(&self) -> usize {
-        self.seqs[0].len()
-    }
-
-    fn new<T: BufRead>(file: T, uppercase: bool, must_aa: bool) -> Alignment {
-        let mut seqs = Vec::new();
-        let mut graphemes: Vec<Graphemes> = Vec::new();
-        let reader = fasta::Reader::new(file);
-        let mut seqlength: Option<usize> = None;
-        for result in reader.records() {
-            let record = match result {
-                Ok(r) => r,
-                Err(e) => {
-                    println!("ERROR: During FASTA parsing, found error:");
-                    println!("{:?}", e);
-                    std::process::exit(1);
-                }
-            };
-            let seq = record.seq().iter().copied().collect::<Vec<_>>();
-
-            // Check identical sequence lengths
-            if let Some(len) = seqlength {
-                if seq.len() != len {
-                    println!(
-                        "ERROR: Not all input sequences are the same length. \
-                    Expected sequence length {}, found {}.",
-                        len,
-                        seq.len()
-                    );
-                    std::process::exit(1);
-                }
-            } else {
-                seqlength = Some(seq.len())
-            }
-            seqs.push(seq);
-            graphemes.push(Graphemes::new(record.id()));
-        }
-
-        // Verify alphabet
-        let is_aa = verify_alphabet(&seqs, &graphemes, must_aa);
-
-        // Turn uppercase if requested
-        if uppercase {
-            make_uppercase(&mut seqs);
-        }
-
-        if seqlength.map_or(true, |i| i < 1) {
-            println!("ERROR: Alignment has zero sequences, or has length 0.");
-            std::process::exit(1);
-        }
-
-        let longest_name = graphemes.iter().map(|v| v.len()).max().unwrap();
-        Alignment {
-            graphemes,
-            longest_name,
-            seqs,
-            is_aa,
-        }
-    }
-}
-
-/// A view object contains all information of what to draw to the screen
-struct View {
-    rowstart: usize, // zero-based index
-    colstart: usize,
-    term_nrows: u16, // obtained from terminal
-    term_ncols: u16,
-    namewidth: u16,
-    aln: Alignment,
-}
-
-impl View {
-    fn new(aln: Alignment) -> View {
-        let (ncols, nrows) = terminal::size().unwrap();
-        let mut view = View {
-            rowstart: 0,
-            colstart: 0,
-            term_nrows: 0,
-            term_ncols: 0,
-            namewidth: 0,
-            aln,
-        };
-        // We need to resize before we resize names, because the latter
-        // depends on a nonzero terminal size.
-        view.resize(ncols, nrows);
-        view.resize_names((ncols >> 2) as isize);
-        view
-    }
-
-    /// Resize the view to the current terminal window, but do not draw anything
-    fn resize(&mut self, ncols: u16, nrows: u16) {
-        // Get terminal size, and set it.
-        let (oldcol, oldrow) = (self.colstart, self.rowstart);
-        self.term_nrows = nrows;
-        self.term_ncols = ncols;
-
-        // Calculate new starts (if you zoom out)
-        self.rowstart = calculate_start(oldrow, 0, self.seq_nrows_display(), self.aln.nrows());
-        self.colstart = calculate_start(oldcol, 0, self.seq_ncols_display(), self.aln.ncols());
-
-        // Calculate new namewidth
-        if self.namewidth > self.term_ncols - 2 {
-            let delta = (self.term_ncols as isize - 2) - self.namewidth as isize;
-            self.resize_names(delta);
-        }
-    }
-
-    fn move_view<T: Write>(&mut self, io: &mut T, dy: isize, dx: isize) {
-        let old_rowstart = self.rowstart;
-        let old_colstart = self.colstart;
-
-        self.rowstart = calculate_start(
-            self.rowstart,
-            dy,
-            self.seq_nrows_display() as usize,
-            self.aln.nrows(),
-        );
-        self.colstart = calculate_start(
-            self.colstart,
-            dx,
-            self.seq_ncols_display() as usize,
-            self.aln.ncols(),
-        );
-
-        // Only update the view if the view was actually moved.
-        if self.rowstart != old_rowstart {
-            draw_names(io, self);
-        }
-        if self.colstart != old_colstart {
-            draw_ruler(io, self)
-        }
-        if self.rowstart != old_rowstart || self.colstart != old_colstart {
-            draw_sequences(io, self);
-            io.flush().unwrap();
-        }
-    }
-
-    fn resize_names(&mut self, delta: isize) {
-        let mut namewidth = (self.namewidth as isize) + delta;
-        namewidth = max(0, namewidth); // not negative
-        namewidth = min(namewidth, (self.term_ncols as isize).saturating_sub(2)); // do not exceed bounds
-
-        // Do not exceed longest name shown on screen
-        namewidth = min(namewidth, self.aln.longest_name as isize);
-        self.namewidth = namewidth.try_into().unwrap();
-    }
-
-    fn seq_nrows_display(&self) -> usize {
-        (self.term_nrows as usize).saturating_sub(HEADER_LINES + FOOTER_LINES)
-    }
-
-    fn seq_row_range(&self) -> Option<RangeInclusive<usize>> {
-        match self.seq_nrows_display() {
-            0 => None,
-            nrows => Some(self.rowstart..=(min(self.aln.nrows() - 1, self.rowstart + nrows - 1))),
-        }
-    }
-
-    fn seq_ncols_display(&self) -> usize {
-        self.term_ncols.saturating_sub(self.namewidth + 1).into() // one '|' char
-    }
-
-    fn seq_col_range(&self) -> Option<RangeInclusive<usize>> {
-        match self.seq_ncols_display() {
-            0 => None,
-            ncols => Some(self.colstart..=(min(self.aln.ncols() - 1, self.colstart + ncols - 1))),
-        }
-    }
-}
-
-fn calculate_start(current: usize, delta: isize, displaysize: usize, n_rows_cols: usize) -> usize {
-    let last_index = n_rows_cols.saturating_sub(displaysize);
-    let moveto = (current as isize).saturating_add(delta);
-    if moveto < 0 {
-        0
-    } else if (moveto as usize) > last_index {
-        last_index
-    } else {
-        moveto.try_into().unwrap()
     }
 }
 
@@ -450,7 +171,7 @@ fn display(view: &mut View) {
                     _ => None,
                 };
                 if let Some((dy, dx)) = delta {
-                    view.move_view(&mut io, dy, dx)
+                    move_view_and_redraw(view, &mut io, dy, dx);
                 };
                 let name_move = match kevent {
                     KeyEvent {
@@ -531,10 +252,11 @@ fn enter_jumpcol_mode<T: Write>(io: &mut T, view: &mut View) {
             Event::Key(KeyEvent { code: KeyCode::Enter, modifiers: _ }) => {
                 match query.parse::<usize>() {
                     Ok(n) => {
-                        if n < 1 || n > view.aln.ncols() {
+                        if n < 1 || n > view.ncols() {
                             invalid_column = true;
                         } else {
-                            view.move_view(io, 0, n as isize - view.colstart as isize);
+                            // minus one because our alignment should be 1-indexed
+                            move_view_and_redraw(view, io, 0, n as isize - view.colstart as isize - 1);
                             break
                         }
                     },
@@ -591,20 +313,20 @@ fn enter_search_mode<T: Write>(io: &mut T, view: &mut View) {
                     // Else, go to the correct row.
                     SearchResult::MatchHeader(nrow) => {
                         let dy = nrow as isize - (view.rowstart + (view.seq_nrows_display() / 2)) as isize;
-                        view.move_view(io, dy, 0);
+                        move_view_and_redraw(view, io, dy, 0);
                         let header_row = (nrow.saturating_sub(view.rowstart) + HEADER_LINES) as u16;
-                        draw_highlight(io, header_row, 0, view.namewidth, &view.aln.graphemes[nrow].string);
+                        draw_highlight(io, header_row, 0, view.namewidth, &view.graphemes()[nrow].string);
                         return
                     },
                     // Else go to correct seq.
                     SearchResult::MatchSeq{row, start, stop} => {
                         let dy = row as isize - (view.rowstart + (view.seq_nrows_display() / 2)) as isize;
                         let dx = start as isize - (view.colstart + (view.seq_ncols_display() / 2)) as isize;
-                        view.move_view(io, dy, dx);
+                        move_view_and_redraw(view, io, dy, dx);
                         let seq_row = (row.saturating_sub(view.rowstart) + HEADER_LINES) as u16;
                         let seq_col = start.saturating_sub(view.colstart) as u16 + (view.namewidth + 1);
                         let highlight_str = unsafe {
-                            std::str::from_utf8_unchecked(&view.aln.seqs[row][start..stop])
+                            std::str::from_utf8_unchecked(&view.seqs()[row][start..stop])
                         };
                         draw_highlight(io, seq_row, seq_col, view.term_ncols, highlight_str);
                         return
@@ -634,14 +356,14 @@ fn search_query(view: &View, query: &str) -> SearchResult {
     };
 
     // First search the headers
-    for (n_header, header) in view.aln.graphemes.iter().enumerate() {
+    for (n_header, header) in view.graphemes().iter().enumerate() {
         if re.is_match(&header.string) {
             return SearchResult::MatchHeader(n_header)
         }
     }
 
     // Then search the sequences
-    for (rowno, seq) in view.aln.seqs.iter().enumerate() {
+    for (rowno, seq) in view.seqs().iter().enumerate() {
         // We have checked on instantiation that this is OK, and do not provide
         // any functionality to mutate the sequences
         let string = unsafe {
@@ -659,7 +381,7 @@ fn draw_search_footer<T: Write>(io: &mut T, view: &View, query: &str, last_resul
     let (background_color, message) = match last_result {
         None => (Color::Grey, " Enter query | "),
         Some(SearchResult::NoMatch) => (Color::Red, " Not found | "),
-        Some(SearchResult::RegexErr) => (Color::Red, "Bad regex | "),
+        Some(SearchResult::RegexErr) => (Color::Red, " Bad regex | "),
         _ => panic!(), // The last two are hits - they should never happen!
     };
     footer.push_str(message);
@@ -691,7 +413,7 @@ fn draw_names<T: Write>(io: &mut T, view: &View) {
             let name = if view.namewidth == 0 {
                 "".to_owned()
             } else {
-                let graphemes = &view.aln.graphemes[nameindex];
+                let graphemes = &view.graphemes()[nameindex];
                 let elide = graphemes.len() > view.namewidth as usize;
                 let namelen = min(graphemes.len(), view.namewidth as usize - elide as usize);
                 let mut name = graphemes.get_n_graphemes(namelen).unwrap().to_owned();
@@ -804,8 +526,8 @@ fn draw_sequences<T: Write>(io: &mut T, view: &View) {
     for (i, alnrow) in row_range.enumerate() {
         let termrow = (i + HEADER_LINES) as u16;
         queue!(io, cursor::MoveTo(view.namewidth + 1, termrow),).unwrap();
-        for byte in view.aln.seqs[alnrow][col_range.clone()].iter() {
-            let color = if view.aln.is_aa {
+        for byte in view.seqs()[alnrow][col_range.clone()].iter() {
+            let color = if view.is_aa() {
                 get_color_background_aa(*byte)
             } else {
                 get_color_background_dna(*byte)
@@ -902,7 +624,6 @@ fn main() {
     let buffered_io = BufReader::new(std::fs::File::open(filename).unwrap());
     let uppercase = args.is_present("uppercase");
     let must_aa = args.is_present("aminoacids");
-    let aln = Alignment::new(BufReader::new(buffered_io), uppercase, must_aa);
-    let mut view = View::new(aln);
+    let mut view = View::from_reader(BufReader::new(buffered_io), uppercase, must_aa);
     display(&mut view);
 }
