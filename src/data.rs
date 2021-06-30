@@ -25,7 +25,7 @@ pub struct Graphemes {
 }
 
 impl Graphemes {
-    fn new(st: &str) -> Graphemes {
+    pub fn new(st: &str) -> Graphemes {
         let string = st.to_owned();
         // If string is ASCII, we save only the string itself, and don't bother
         // to do grapheme identification, since 1 grapheme == 1 byte == 1 char
@@ -112,12 +112,47 @@ fn make_uppercase(seqs: &mut [Vec<u8>]) {
     }
 }
 
+fn calculate_consensus(seqs: &[Vec<u8>], is_aa: bool) -> Vec<Option<u8>> {
+    // We know the sequences are ASCII, and we upper-case them, so the largest
+    // character is 'Z'
+    let mut counts = [0u32; 96];
+    let ncols = seqs[0].len();
+    let mut result = Vec::with_capacity(ncols);
+    for col in 0..ncols {
+        counts.fill(0u32);
+        for seq in seqs.iter() {
+            // Unset third bit to uppercase ASCII letters
+            counts[seq[col] as usize & 0b11011111] += 1;
+        }
+        // We set all ambiguous bases/AAs to 0.
+        for &i in if is_aa {
+            b"BJOUXZZZZZZ"
+        } else {
+            b"MRSVWYHKDBN"
+        } {
+            counts[i as usize] = 0;
+        }
+        let (mut most_common_byte, count) = counts.iter().enumerate().max_by_key(|(_, &x)| x).map(|(i, cnt)| (i as u8, cnt)).unwrap();
+
+        // If the most common is * or -, it becomes \n and \r after unsetting the bit.
+        most_common_byte = match most_common_byte {
+            b'\r' => b'-',
+            b'\n' => b'*',
+            _ => most_common_byte
+        };
+
+        result.push(if *count == 0 {None} else {Some(most_common_byte)});
+    }
+    result
+}
+
 pub struct Alignment {
     graphemes: Vec<Graphemes>,
     // longest as in number of graphemes. We cache this for efficiency, it can be
     // computed from the graphemes field easily
     longest_name: usize,
     seqs: Vec<Vec<u8>>,
+    consensus: Vec<Option<u8>>,
     is_aa: bool,
 }
 
@@ -170,11 +205,14 @@ impl Alignment {
             return Err(anyhow!("Alignment has no seqs, or seqs have length 0."));
         }
 
+        let consensus = calculate_consensus(&seqs, is_aa);
+
         let longest_name = graphemes.iter().map(|v| v.len()).max().unwrap();
         Ok(Alignment {
             graphemes,
             longest_name,
             seqs,
+            consensus,
             is_aa,
         })
     }
@@ -199,6 +237,7 @@ pub struct View {
     pub term_nrows: u16, // obtained from terminal
     pub term_ncols: u16,
     pub namewidth: u16,
+    pub consensus: bool, // if consensus view is shown
     aln: Alignment,
 }
 
@@ -211,6 +250,7 @@ impl View {
             term_nrows: 0,
             term_ncols: 0,
             namewidth: 0,
+            consensus: false,
             aln,
         };
         // We need to resize before we resize names, because the latter
@@ -230,6 +270,10 @@ impl View {
 
     pub fn seqs(&self) -> &Vec<Vec<u8>> {
         &self.aln.seqs
+    }
+
+    pub fn consensus(&self) -> &Vec<Option<u8>> {
+        &self.aln.consensus
     }
 
     pub fn is_aa(&self) -> bool {
@@ -291,10 +335,21 @@ impl View {
         (self.term_nrows as usize).saturating_sub(HEADER_LINES + FOOTER_LINES)
     }
 
-    pub fn seq_row_range(&self) -> Option<RangeInclusive<usize>> {
+    fn last_seq_row(&self) -> Option<usize> {
         match self.seq_nrows_display() {
             0 => None,
-            nrows => Some(self.rowstart..=(min(self.nrows() - 1, self.rowstart + nrows - 1))),
+            nrows => Some(min(self.nrows() - 1, self.rowstart + nrows - 1)),
+        }
+    }
+
+    pub fn seq_row_range(&self) -> Option<RangeInclusive<usize>> {
+        Some(self.rowstart..=self.last_seq_row()?)
+    }
+
+    pub fn cons_row_range(&self) -> Option<RangeInclusive<usize>> {
+        match self.seq_nrows_display() {
+            0 => None,
+            nrows => Some(self.rowstart..=min(self.nrows() - 1, self.rowstart + nrows - 2)),
         }
     }
 

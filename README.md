@@ -22,6 +22,7 @@ Note that Alen loads in the entire alignment in memory, so don't use it for mult
 __Commands__
 
 * `Esc / q / Control-C`: Quit
+* `c`: Toggle consensus sequence comparison
 * `r`: Re-render the screen.
 * `Ctrl-f`: Search. Searches headers, then sequences for regex, case insensitively.
 * `Ctrl-j`: Jump to column.

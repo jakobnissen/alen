@@ -1,14 +1,14 @@
+// To do: Needs a refactor or two. This is turning into spaghetti code.
 // To do: More formats?
 // To do: Make stdin work on MacOS
 // To do: Implement multithreading. One thread reads input and moves view etc,
 // another draws. Drawings can be "skipped" if there are still queued inputs, perhaps?
-// To do: Possibly show deviation from consensus?
 
 mod constants;
 mod data;
 
 use constants::HEADER_LINES;
-use data::View;
+use data::{View, Graphemes};
 
 use std::cmp::min;
 use std::io::{stdout, BufReader, Write};
@@ -220,12 +220,25 @@ fn display<T: Write>(io: &mut T, view: &mut View) -> Result<()> {
                     io.flush()?;
                 };
 
+                // Redraw
                 if kevent
                     == (KeyEvent {
                         code: KeyCode::Char('r'),
                         modifiers: event::KeyModifiers::NONE,
                     })
                 {
+                    draw_all(io, view)?;
+                    io.flush()?;
+                };
+
+                // Shift to/from consensus view
+                if kevent
+                    == (KeyEvent {
+                        code: KeyCode::Char('c'),
+                        modifiers: event::KeyModifiers::NONE,
+                    })
+                {
+                    view.consensus = !view.consensus;
                     draw_all(io, view)?;
                     io.flush()?;
                 };
@@ -424,7 +437,7 @@ fn search_query(view: &View, query: &str) -> SearchResult {
     let re = match RegexBuilder::new(query).case_insensitive(true).build() {
         Ok(regex) => regex,
         Err(_) => {
-            return SearchResult::RegexErr; // TODO: Somehow print that it didn't work
+            return SearchResult::RegexErr;
         }
     };
 
@@ -479,43 +492,72 @@ fn draw_all<T: Write>(io: &mut T, view: &View) -> Result<()> {
         execute!(io, cursor::MoveTo(0, 0), Print(":("),)?;
     } else {
         draw_ruler(io, view)?;
-        draw_names(io, view)?;
         draw_default_footer(io, view)?;
+        draw_names(io, view)?;
         draw_sequences(io, view)?;
     }
     Ok(io.flush()?)
 }
 
 fn draw_names<T: Write>(io: &mut T, view: &View) -> Result<()> {
+    if view.consensus {
+        draw_consensus_names(io, view)?;
+    } else {
+        draw_nonconsensus_names(io, view)?;
+    }
+    Ok(())
+}
+
+
+fn draw_nonconsensus_names<T: Write>(io: &mut T, view: &View) -> Result<()> {
     if let Some(range) = view.seq_row_range() {
         for (i, nameindex) in range.into_iter().enumerate() {
             let termrow = (i + HEADER_LINES) as u16;
-            let name = if view.namewidth == 0 {
-                "".to_owned()
-            } else {
-                let graphemes = &view.graphemes()[nameindex];
-                let elide = graphemes.len() > view.namewidth as usize;
-                let namelen = min(graphemes.len(), view.namewidth as usize - elide as usize);
-                let mut name = graphemes.get_n_graphemes(namelen).unwrap().to_owned();
-                if elide {
-                    name.push('…')
-                } else {
-                    let missing_graphemes = view.namewidth as usize - graphemes.len();
-                    name.push_str(&" ".repeat(missing_graphemes));
-                }
-                name
-            };
-            queue!(
-                io,
-                cursor::MoveTo(0, termrow),
-                Print(name),
-                cursor::MoveTo(view.namewidth, termrow),
-                Print('│'),
-            )?;
+            draw_name(io, view.namewidth, &view.graphemes()[nameindex], termrow)?;
         }
     }
     Ok(())
 }
+
+fn draw_consensus_names<T: Write>(io: &mut T, view: &View) -> Result<()> {
+    let nrows = view.seq_nrows_display();
+    if nrows != 0 {
+        draw_name(io, view.namewidth, &Graphemes::new(&"consensus"), HEADER_LINES as u16)?;
+    }
+    if let Some(range) = view.cons_row_range() {
+        for (i, nameindex) in range.enumerate() {
+            let termrow = (i + 1 + HEADER_LINES) as u16;
+            draw_name(io, view.namewidth, &view.graphemes()[nameindex], termrow)?;
+        }
+    }
+    Ok(())
+}
+
+fn draw_name<T: Write>(io: &mut T, namewidth: u16, graphemes: &Graphemes, termrow: u16) -> Result<()> {
+    let name = if namewidth == 0 {
+        "".to_owned()
+    } else {
+        let elide = graphemes.len() > namewidth as usize;
+        let namelen = min(graphemes.len(), namewidth as usize - elide as usize);
+        let mut name = graphemes.get_n_graphemes(namelen).unwrap().to_owned();
+        if elide {
+            name.push('…')
+        } else {
+            let missing_graphemes = namewidth as usize - graphemes.len();
+            name.push_str(&" ".repeat(missing_graphemes));
+        }
+        name
+    };
+    queue!(
+        io,
+        cursor::MoveTo(0, termrow),
+        Print(name),
+        cursor::MoveTo(namewidth, termrow),
+        Print('│'),
+    )?;
+    Ok(())
+}
+
 
 fn draw_ruler<T: Write>(io: &mut T, view: &View) -> Result<()> {
     // Make the top line with the numbers.
@@ -555,7 +597,7 @@ fn draw_default_footer<T: Write>(io: &mut T, view: &View) -> Result<()> {
     draw_footer(
         io,
         view,
-        "q/Esc: Quit   ←/→/↑/↓ + None/Shift/Ctrl: Move alignment   ./,: Adjust names   Ctrl+f: Find    Ctrl+j Jump",
+        "q/Esc: Quit | ←/→/↑/↓ + None/Shift/Ctrl: Move |./,: Adjust names | Ctrl+f: Find | Ctrl+j Jump | r: Redraw | c: Consensus",
         Color::Grey
     )
 }
@@ -590,6 +632,15 @@ fn draw_footer<T: Write>(io: &mut T, view: &View, text: &str, background: Color)
 // possible to the terminal by checking every single operation to see if it's
 // necessary
 fn draw_sequences<T: Write>(io: &mut T, view: &View) -> Result<()> {
+    if view.consensus {
+        draw_consensus_sequences(io, view)?;
+    } else {
+        draw_nonconsensus_sequences(io, view)?;
+    }
+    Ok(())
+}
+
+fn draw_nonconsensus_sequences<T: Write>(io: &mut T, view: &View) -> Result<()> {
     let row_range = match view.seq_row_range() {
         Some(n) => n,
         None => return Ok(()),
@@ -599,38 +650,130 @@ fn draw_sequences<T: Write>(io: &mut T, view: &View) -> Result<()> {
         None => return Ok(()),
     };
 
-    let mut oldcolor: Option<Color> = None;
-    let mut is_foreground_black = false;
     for (i, alnrow) in row_range.enumerate() {
         let termrow = (i + HEADER_LINES) as u16;
-        queue!(io, cursor::MoveTo(view.namewidth + 1, termrow),)?;
-        for byte in view.seqs()[alnrow][col_range.clone()].iter() {
-            let color = if view.is_aa() {
+        let seq = &view.seqs()[alnrow][col_range.clone()];
+        draw_sequence(io, view.namewidth + 1, view.is_aa(), seq, termrow)?;
+    }
+    Ok(queue!(io, ResetColor,)?)
+}
+
+fn draw_sequence<T: Write>(io: &mut T, colstart: u16, is_aa: bool, seq: &[u8], termrow: u16) -> Result<()> {
+    queue!(io, cursor::MoveTo(colstart, termrow), ResetColor)?;
+    let mut oldcolor = None;
+    let mut is_foreground_black = false;
+    for byte in seq {
+        let color = if is_aa {
+            get_color_background_aa(*byte)
+        } else {
+            get_color_background_dna(*byte)
+        };
+        // if color is same as before, don't queue up color changing operations
+        if color != oldcolor {
+            // If the current cell needs a background color, set it
+            if let Some(clr) = color {
+                // only set foreground to black if it isn't already
+                if !is_foreground_black {
+                    queue!(io, SetForegroundColor(Color::Black))?;
+                    is_foreground_black = true;
+                };
+                queue!(io, SetBackgroundColor(clr))?;
+            // Otherwise, reset to default color scheme
+            } else {
+                queue!(io, ResetColor)?;
+                is_foreground_black = false;
+            }
+        };
+        queue!(io, Print(*byte as char))?;
+        oldcolor = color;
+    }
+    Ok(())        
+}
+
+fn draw_top_consensus<T: Write>(io: &mut T, colstart: u16, is_aa: bool, seq: &[Option<u8>]) -> Result<()> {
+    queue!(io, cursor::MoveTo(colstart, HEADER_LINES as u16), ResetColor)?;
+    let mut old_background_color = None;
+    let mut is_foreground_black = false;
+    for maybe_base in seq {
+        let (background_color, symbol) = if let Some(byte) = maybe_base {
+            let bc = if is_aa {
                 get_color_background_aa(*byte)
             } else {
                 get_color_background_dna(*byte)
             };
-            // if color is same as before, don't queue up color changing operations
-            if color != oldcolor {
-                // If the current cell needs a background color, set it
-                if let Some(clr) = color {
-                    // only set foreground to black if it isn't already
-                    if !is_foreground_black {
-                        queue!(io, SetForegroundColor(Color::Black))?;
-                        is_foreground_black = true;
-                    };
-                    queue!(io, SetBackgroundColor(clr))?;
-                // Otherwise, reset to default color scheme
-                } else {
-                    queue!(io, ResetColor)?;
-                    is_foreground_black = false;
+            (bc, *byte as char)
+        } else {
+            (None, ' ')
+        };
+        if background_color != old_background_color {
+            if let Some(clr) = background_color {
+                if !is_foreground_black {
+                    queue!(io, SetForegroundColor(Color::Black))?;
+                    is_foreground_black = true;
                 }
+                queue!(io, SetBackgroundColor(clr))?;
+            } else {
+                queue!(io, ResetColor)?;
+                is_foreground_black = false;
+            }
+        }
+        queue!(io, Print(symbol))?;
+        old_background_color = background_color;
+    }
+    Ok(())
+}
+
+fn draw_consensus_other_seq<T: Write>(io: &mut T, colstart: u16, termrow: u16, is_aa: bool, seq: &[u8], cons: &[Option<u8>]) -> Result<()> {
+    queue!(io, cursor::MoveTo(colstart, termrow), ResetColor)?;
+    let mut oldcolor = None;
+    let mut is_foreground_black = false;
+    for (byte, maybe_cons) in seq.iter().zip(cons.iter()) {
+        let (color, symbol) = if maybe_cons.is_some() && maybe_cons.unwrap() & 0b11011111 == byte & 0b11011111 {
+            (None, ' ')
+        } else {
+            let color = if is_aa {
+                get_color_background_aa(*byte)
+            } else {
+                get_color_background_dna(*byte)
             };
-            queue!(io, Print(*byte as char))?;
-            oldcolor = color;
+            (color, *byte as char)
+        };
+        if color != oldcolor {
+            if let Some(clr) = color {
+                if !is_foreground_black {
+                    queue!(io, SetForegroundColor(Color::Black))?;
+                    is_foreground_black = true;
+                }
+                queue!(io, SetBackgroundColor(clr))?;
+            } else {
+                queue!(io, ResetColor)?;
+                is_foreground_black = false;
+            }
+        }
+        queue!(io, Print(symbol))?;
+        oldcolor = color;
+    }
+    Ok(())
+}
+
+fn draw_consensus_sequences<T: Write>(io: &mut T, view: &View) -> Result<()> {
+    let col_range = match view.seq_col_range() {
+        Some(n) => n,
+        None => return Ok(()),
+    };
+
+    // First draw top row
+    let cons_seq = &view.consensus()[col_range.clone()];
+    draw_top_consensus(io, view.namewidth + 1, view.is_aa(), cons_seq)?;
+
+    // Then draw rest, if applicable
+    if let Some(alnrows) = view.cons_row_range() {
+        for (i, alnrow) in alnrows.enumerate() {
+            let termrow = (i + HEADER_LINES + 1) as u16;
+            let seq = &view.seqs()[alnrow][col_range.clone()];
+            draw_consensus_other_seq(io, view.namewidth + 1, termrow, view.is_aa(), seq, cons_seq)?
         }
     }
-
     Ok(queue!(io, ResetColor,)?)
 }
 
