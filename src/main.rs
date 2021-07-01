@@ -377,7 +377,7 @@ fn draw_jump_footer<T: Write>(
 ) -> Result<()> {
     let mut text = "[Esc: Quit] ".to_owned();
     text.push_str(if invalid_column {
-        "Invalid number: "
+        "Invalid column: "
     } else {
         "Jump to column: "
     });
@@ -656,7 +656,7 @@ fn draw_default_footer<T: Write>(io: &mut TerminalIO<T>, view: &View) -> Result<
     draw_footer(
         io,
         view,
-        "q/Esc: Quit | ←/→/↑/↓ + None/Shift/Ctrl: Move |./,: Adjust names | Ctrl+f: Find | Ctrl+j Jump | r: Redraw | c: Consensus",
+        "q/Esc: Quit | ←/→/↑/↓ + None/Shift/Ctrl: Move |./,: Adjust names | Ctrl+f: Find | Ctrl+j: Jump | r: Redraw | c: Consensus",
         Color::Grey
     )
 }
