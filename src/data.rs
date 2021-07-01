@@ -124,7 +124,9 @@ fn calculate_consensus(seqs: &[Vec<u8>], is_aa: bool) -> Vec<Option<u8>> {
             // Unset third bit to uppercase ASCII letters
             counts[seq[col] as usize & 0b11011111] += 1;
         }
+
         // We set all ambiguous bases/AAs to 0.
+        // These are useless in the consensus
         for &i in if is_aa {
             b"BJOUXZZZZZZ"
         } else {
@@ -132,16 +134,25 @@ fn calculate_consensus(seqs: &[Vec<u8>], is_aa: bool) -> Vec<Option<u8>> {
         } {
             counts[i as usize] = 0;
         }
-        let (mut most_common_byte, count) = counts.iter().enumerate().max_by_key(|(_, &x)| x).map(|(i, cnt)| (i as u8, cnt)).unwrap();
+        let (mut most_common_byte, count) = counts
+            .iter()
+            .enumerate()
+            .max_by_key(|(_, &x)| x)
+            .map(|(i, cnt)| (i as u8, cnt))
+            .unwrap();
 
         // If the most common is * or -, it becomes \n and \r after unsetting the bit.
         most_common_byte = match most_common_byte {
             b'\r' => b'-',
             b'\n' => b'*',
-            _ => most_common_byte
+            _ => most_common_byte,
         };
 
-        result.push(if *count == 0 {None} else {Some(most_common_byte)});
+        result.push(if *count == 0 {
+            None
+        } else {
+            Some(most_common_byte)
+        });
     }
     result
 }
@@ -332,9 +343,11 @@ impl View {
     }
 
     pub fn seq_nrows_display(&self) -> usize {
-        (self.term_nrows as usize).saturating_sub(HEADER_LINES + FOOTER_LINES)
+        (self.term_nrows as usize)
+            .saturating_sub(HEADER_LINES + FOOTER_LINES + self.consensus as usize)
     }
 
+    /// Index of last seq row
     fn last_seq_row(&self) -> Option<usize> {
         match self.seq_nrows_display() {
             0 => None,
@@ -346,13 +359,6 @@ impl View {
         Some(self.rowstart..=self.last_seq_row()?)
     }
 
-    pub fn cons_row_range(&self) -> Option<RangeInclusive<usize>> {
-        match self.seq_nrows_display() {
-            0 => None,
-            nrows => Some(self.rowstart..=min(self.nrows() - 1, self.rowstart + nrows - 2)),
-        }
-    }
-
     pub fn seq_ncols_display(&self) -> usize {
         self.term_ncols.saturating_sub(self.namewidth + 1).into() // one '|' char
     }
@@ -361,6 +367,24 @@ impl View {
         match self.seq_ncols_display() {
             0 => None,
             ncols => Some(self.colstart..=(min(self.ncols() - 1, self.colstart + ncols - 1))),
+        }
+    }
+
+    // Returns None if the row is not drawn on screen, and the u16 otherwise
+    pub fn display_row_of_index(&self, index: usize) -> Option<u16> {
+        match self.seq_row_range() {
+            None => None,
+            Some(range) => {
+                if range.contains(&index) {
+                    Some(
+                        (index.checked_sub(self.rowstart).unwrap()
+                            + HEADER_LINES
+                            + self.consensus as usize) as u16,
+                    )
+                } else {
+                    None
+                }
+            }
         }
     }
 }
