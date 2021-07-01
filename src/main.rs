@@ -34,11 +34,13 @@ use crossterm::{
 // in this app is switching between colors, so we keep that to a minimum.
 struct TerminalIO<T> {
     io: T,
+    // If has_color is true, color is always None
     color: Option<Color>,
+    has_color: bool,
 }
 
 fn set_terminal_color<T: Write>(io: &mut TerminalIO<T>, color: Option<Color>) -> Result<()> {
-    if color != io.color {
+    if color != io.color && io.has_color {
         if let Some(clr) = color {
             queue!(io.io, SetBackgroundColor(clr))?;
             if color.is_some() {
@@ -538,7 +540,10 @@ fn draw_search_footer<T: Write>(
 fn draw_all<T: Write>(io: &mut TerminalIO<T>, view: &View) -> Result<()> {
     // We do need to reset the colors here, else I think the clearing of the
     // terminal will "clear" to the current color.
-    execute!(io.io, ResetColor, terminal::Clear(ClearType::All),)?;
+    if io.has_color {
+        queue!(io.io, ResetColor)?;
+    }
+    execute!(io.io, terminal::Clear(ClearType::All),)?;
 
     if view.term_ncols < 2 || view.term_nrows < 4 {
         // This seems silly, but I have it because it allows me to assume a minimal
@@ -843,8 +848,11 @@ fn draw_highlight<T: Write>(
     )?)
 }
 
-fn clean_terminal<T: Write>(io: &mut T) -> Result<()> {
-    execute!(io, ResetColor, cursor::Show, terminal::LeaveAlternateScreen)?;
+fn clean_terminal<T: Write>(io: &mut TerminalIO<T>) -> Result<()> {
+    if io.has_color {
+        queue!(io.io, ResetColor)?;
+    }
+    execute!(io.io, cursor::Show, terminal::LeaveAlternateScreen)?;
     Ok(terminal::disable_raw_mode()?)
 }
 
@@ -871,6 +879,12 @@ fn main() {
                 .takes_value(false)
                 .help("Force parsing as amino acids"),
         )
+        .arg(
+            clap::Arg::with_name("monochrome")
+                .short("m")
+                .takes_value(false)
+                .help("Disable colors (may improve lag)"),
+        )
         .get_matches();
 
     let filename = args.value_of("alignment").unwrap();
@@ -888,6 +902,7 @@ fn main() {
     let buffered_io = BufReader::new(file);
     let uppercase = args.is_present("uppercase");
     let must_aa = args.is_present("aminoacids");
+    let has_color = !args.is_present("monochrome");
     let view = View::from_reader(BufReader::new(buffered_io), uppercase, must_aa);
     match view {
         Err(e) => {
@@ -898,11 +913,12 @@ fn main() {
             let mut io = TerminalIO {
                 io: stdout(),
                 color: None,
+                has_color
             };
             if let Err(e) = display(&mut io, &mut view) {
                 println!("Error: {}", e);
             }
-            clean_terminal(&mut io.io).unwrap();
+            clean_terminal(&mut io).unwrap();
             std::process::exit(0);
         }
     }
