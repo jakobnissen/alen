@@ -1,7 +1,4 @@
 // To do: Needs a refactor or two. This is turning into spaghetti code.
-// Perhaps factor out all the color changing logic? The view could have a current color of Option<Color>,
-// and then there could be a print_symbol function that took a char and a color, changed the current color
-// if applicable, and printed it.
 
 // To do: More formats?
 // To do: Make stdin work on MacOS
@@ -32,7 +29,35 @@ use crossterm::{
     terminal::{self, ClearType},
 };
 
-fn move_view_and_redraw<T: Write>(view: &mut View, io: &mut T, dy: isize, dx: isize) -> Result<()> {
+// This struct represents the mutable terminal state
+// It's important to cache the current colors, because the major bottleneck
+// in this app is switching between colors, so we keep that to a minimum.
+struct TerminalIO<T> {
+    io: T,
+    color: Option<Color>,
+}
+
+fn set_terminal_color<T: Write>(io: &mut TerminalIO<T>, color: Option<Color>) -> Result<()> {
+    if color != io.color {
+        if let Some(clr) = color {
+            queue!(io.io, SetBackgroundColor(clr))?;
+            if color.is_some() {
+                queue!(io.io, SetForegroundColor(Color::Black))?;
+            }
+        } else {
+            queue!(io.io, ResetColor)?;
+        }
+        io.color = color;
+    }
+    Ok(())
+}
+
+fn move_view_and_redraw<T: Write>(
+    io: &mut TerminalIO<T>,
+    view: &mut View,
+    dy: isize,
+    dx: isize,
+) -> Result<()> {
     let old_rowstart = view.rowstart;
     let old_colstart = view.colstart;
 
@@ -41,15 +66,15 @@ fn move_view_and_redraw<T: Write>(view: &mut View, io: &mut T, dy: isize, dx: is
     // Only update the view if the view was actually moved.
     if view.rowstart != old_rowstart {
         draw_names(io, view)?;
-        io.flush()?;
+        io.io.flush()?;
     }
     if view.colstart != old_colstart {
         draw_ruler(io, view)?;
-        io.flush()?;
+        io.io.flush()?;
     }
     if view.rowstart != old_rowstart || view.colstart != old_colstart {
         draw_sequences(io, view)?;
-        io.flush()?;
+        io.io.flush()?;
     }
     Ok(())
 }
@@ -100,11 +125,11 @@ fn get_color_background_aa(byte: u8) -> Option<Color> {
     }
 }
 
-fn display<T: Write>(io: &mut T, view: &mut View) -> Result<()> {
+fn display<T: Write>(io: &mut TerminalIO<T>, view: &mut View) -> Result<()> {
     terminal::enable_raw_mode()?;
-    execute!(io, terminal::EnterAlternateScreen, cursor::Hide,)?;
+    execute!(io.io, terminal::EnterAlternateScreen, cursor::Hide,)?;
     draw_all(io, view)?;
-    io.flush()?;
+    io.io.flush()?;
 
     loop {
         let event = event::read()?;
@@ -112,6 +137,7 @@ fn display<T: Write>(io: &mut T, view: &mut View) -> Result<()> {
         // Break on Q or Esc or Control-C
         if event == Event::Key(KeyCode::Esc.into())
             || event == Event::Key(KeyCode::Char('q').into())
+            || event == Event::Key(KeyCode::Char('Q').into())
             || event
                 == Event::Key(KeyEvent {
                     code: KeyCode::Char('c'),
@@ -179,7 +205,7 @@ fn display<T: Write>(io: &mut T, view: &mut View) -> Result<()> {
                     _ => None,
                 };
                 if let Some((dy, dx)) = delta {
-                    move_view_and_redraw(view, io, dy, dx)?;
+                    move_view_and_redraw(io, view, dy, dx)?;
                 };
                 let name_move = match kevent {
                     KeyEvent {
@@ -206,22 +232,30 @@ fn display<T: Write>(io: &mut T, view: &mut View) -> Result<()> {
                     == (KeyEvent {
                         code: KeyCode::Char('f'),
                         modifiers: event::KeyModifiers::CONTROL,
+                    }) || kevent
+                    == (KeyEvent {
+                        code: KeyCode::Char('F'),
+                        modifiers: event::KeyModifiers::CONTROL,
                     })
                 {
                     enter_search_mode(io, view)?;
                     draw_default_footer(io, view)?;
-                    io.flush()?;
+                    io.io.flush()?;
                 };
 
                 if kevent
                     == (KeyEvent {
                         code: KeyCode::Char('j'),
                         modifiers: event::KeyModifiers::CONTROL,
+                    }) || kevent
+                    == (KeyEvent {
+                        code: KeyCode::Char('J'),
+                        modifiers: event::KeyModifiers::CONTROL,
                     })
                 {
                     enter_jumpcol_mode(io, view)?;
                     draw_default_footer(io, view)?;
-                    io.flush()?;
+                    io.io.flush()?;
                 };
 
                 // Redraw
@@ -229,16 +263,24 @@ fn display<T: Write>(io: &mut T, view: &mut View) -> Result<()> {
                     == (KeyEvent {
                         code: KeyCode::Char('r'),
                         modifiers: event::KeyModifiers::NONE,
+                    }) || kevent
+                    == (KeyEvent {
+                        code: KeyCode::Char('R'),
+                        modifiers: event::KeyModifiers::NONE,
                     })
                 {
                     draw_all(io, view)?;
-                    io.flush()?;
+                    io.io.flush()?;
                 };
 
                 // Shift to/from consensus view
                 if kevent
                     == (KeyEvent {
                         code: KeyCode::Char('c'),
+                        modifiers: event::KeyModifiers::NONE,
+                    }) || kevent
+                    == (KeyEvent {
+                        code: KeyCode::Char('C'),
                         modifiers: event::KeyModifiers::NONE,
                     })
                 {
@@ -250,7 +292,7 @@ fn display<T: Write>(io: &mut T, view: &mut View) -> Result<()> {
                     let delta = if view.consensus { 1 } else { -1 };
                     view.move_view(delta, 0);
                     draw_all(io, view)?;
-                    io.flush()?;
+                    io.io.flush()?;
                 };
             }
             Event::Resize(ncols, nrows) => {
@@ -264,12 +306,12 @@ fn display<T: Write>(io: &mut T, view: &mut View) -> Result<()> {
 }
 
 // TODO: Refactor - this and search mode?
-fn enter_jumpcol_mode<T: Write>(io: &mut T, view: &mut View) -> Result<()> {
+fn enter_jumpcol_mode<T: Write>(io: &mut TerminalIO<T>, view: &mut View) -> Result<()> {
     let mut query = String::new();
     let mut invalid_column = false;
     loop {
         draw_jump_footer(io, &query, view, invalid_column)?;
-        io.flush()?;
+        io.io.flush()?;
         let event = event::read()?;
 
         if event == Event::Key(KeyCode::Esc.into())
@@ -308,8 +350,8 @@ fn enter_jumpcol_mode<T: Write>(io: &mut T, view: &mut View) -> Result<()> {
                         } else {
                             // minus one because our alignment should be 1-indexed
                             move_view_and_redraw(
-                                view,
                                 io,
+                                view,
                                 0,
                                 n as isize - view.colstart as isize - 1,
                             )?;
@@ -328,7 +370,7 @@ fn enter_jumpcol_mode<T: Write>(io: &mut T, view: &mut View) -> Result<()> {
 }
 
 fn draw_jump_footer<T: Write>(
-    io: &mut T,
+    io: &mut TerminalIO<T>,
     query: &str,
     view: &View,
     invalid_column: bool,
@@ -349,12 +391,12 @@ fn draw_jump_footer<T: Write>(
     Ok(())
 }
 
-fn enter_search_mode<T: Write>(io: &mut T, view: &mut View) -> Result<()> {
+fn enter_search_mode<T: Write>(io: &mut TerminalIO<T>, view: &mut View) -> Result<()> {
     let mut query = String::new();
     let mut last_result = None; // we change the prompt based on the last result
     loop {
         draw_search_footer(io, view, &query, last_result)?;
-        io.flush()?;
+        io.io.flush()?;
         let event = event::read()?;
 
         // Quit on escape or Ctrl-C
@@ -396,7 +438,7 @@ fn enter_search_mode<T: Write>(io: &mut T, view: &mut View) -> Result<()> {
                     SearchResult::MatchHeader(nrow) => {
                         let dy = nrow as isize
                             - (view.rowstart + (view.seq_nrows_display() / 2)) as isize;
-                        move_view_and_redraw(view, io, dy, 0)?;
+                        move_view_and_redraw(io, view, dy, 0)?;
                         let header_row = view.display_row_of_index(nrow).unwrap();
                         draw_highlight(
                             io,
@@ -413,7 +455,7 @@ fn enter_search_mode<T: Write>(io: &mut T, view: &mut View) -> Result<()> {
                             - (view.rowstart + (view.seq_nrows_display() / 2)) as isize;
                         let dx = start as isize
                             - (view.colstart + (view.seq_ncols_display() / 2)) as isize;
-                        move_view_and_redraw(view, io, dy, dx)?;
+                        move_view_and_redraw(io, view, dy, dx)?;
                         let seq_row = view.display_row_of_index(row).unwrap();
                         let seq_col =
                             start.saturating_sub(view.colstart) as u16 + (view.namewidth + 1);
@@ -475,7 +517,7 @@ fn search_query(view: &View, query: &str) -> SearchResult {
 }
 
 fn draw_search_footer<T: Write>(
-    io: &mut T,
+    io: &mut TerminalIO<T>,
     view: &View,
     query: &str,
     last_result: Option<SearchResult>,
@@ -493,23 +535,26 @@ fn draw_search_footer<T: Write>(
     draw_footer(io, view, &footer, background_color)
 }
 
-fn draw_all<T: Write>(io: &mut T, view: &View) -> Result<()> {
-    execute!(io, ResetColor, terminal::Clear(ClearType::All),)?;
+fn draw_all<T: Write>(io: &mut TerminalIO<T>, view: &View) -> Result<()> {
+    // We do need to reset the colors here, else I think the clearing of the
+    // terminal will "clear" to the current color.
+    execute!(io.io, ResetColor, terminal::Clear(ClearType::All),)?;
 
     if view.term_ncols < 2 || view.term_nrows < 4 {
         // This seems silly, but I have it because it allows me to assume a minimal
         // terminal size when drawing the regular alignment
-        execute!(io, cursor::MoveTo(0, 0), Print(":("),)?;
+        execute!(io.io, cursor::MoveTo(0, 0), Print(":("),)?;
     } else {
         draw_ruler(io, view)?;
         draw_default_footer(io, view)?;
         draw_names(io, view)?;
         draw_sequences(io, view)?;
     }
-    Ok(io.flush()?)
+    Ok(io.io.flush()?)
 }
 
-fn draw_names<T: Write>(io: &mut T, view: &View) -> Result<()> {
+fn draw_names<T: Write>(io: &mut TerminalIO<T>, view: &View) -> Result<()> {
+    set_terminal_color(io, None)?;
     if view.consensus {
         draw_consensus_names(io, view)?;
     } else {
@@ -518,7 +563,7 @@ fn draw_names<T: Write>(io: &mut T, view: &View) -> Result<()> {
     Ok(())
 }
 
-fn draw_nonconsensus_names<T: Write>(io: &mut T, view: &View) -> Result<()> {
+fn draw_nonconsensus_names<T: Write>(io: &mut TerminalIO<T>, view: &View) -> Result<()> {
     if let Some(range) = view.seq_row_range() {
         for (i, nameindex) in range.into_iter().enumerate() {
             let termrow = (i + HEADER_LINES) as u16;
@@ -528,7 +573,7 @@ fn draw_nonconsensus_names<T: Write>(io: &mut T, view: &View) -> Result<()> {
     Ok(())
 }
 
-fn draw_consensus_names<T: Write>(io: &mut T, view: &View) -> Result<()> {
+fn draw_consensus_names<T: Write>(io: &mut TerminalIO<T>, view: &View) -> Result<()> {
     if view.term_nrows > HEADER_LINES as u16 {
         draw_name(
             io,
@@ -547,13 +592,13 @@ fn draw_consensus_names<T: Write>(io: &mut T, view: &View) -> Result<()> {
 }
 
 fn draw_name<T: Write>(
-    io: &mut T,
+    io: &mut TerminalIO<T>,
     namewidth: u16,
     graphemes: &Graphemes,
     termrow: u16,
 ) -> Result<()> {
     let name = if namewidth == 0 {
-        "".to_owned()
+        "|".to_owned()
     } else {
         let elide = graphemes.len() > namewidth as usize;
         let namelen = min(graphemes.len(), namewidth as usize - elide as usize);
@@ -564,19 +609,16 @@ fn draw_name<T: Write>(
             let missing_graphemes = namewidth as usize - graphemes.len();
             name.push_str(&" ".repeat(missing_graphemes));
         }
+        name.push('|');
         name
     };
-    queue!(
-        io,
-        cursor::MoveTo(0, termrow),
-        Print(name),
-        cursor::MoveTo(namewidth, termrow),
-        Print('│'),
-    )?;
+    queue!(io.io, cursor::MoveTo(0, termrow), Print(name),)?;
     Ok(())
 }
 
-fn draw_ruler<T: Write>(io: &mut T, view: &View) -> Result<()> {
+fn draw_ruler<T: Write>(io: &mut TerminalIO<T>, view: &View) -> Result<()> {
+    set_terminal_color(io, None)?;
+
     // Make the top line with the numbers.
     let num_string = {
         let mut string = String::new();
@@ -602,7 +644,7 @@ fn draw_ruler<T: Write>(io: &mut T, view: &View) -> Result<()> {
     };
 
     Ok(queue!(
-        io,
+        io.io,
         cursor::MoveTo(view.namewidth, 0),
         Print(num_string),
         cursor::MoveTo(view.namewidth, 1),
@@ -610,7 +652,7 @@ fn draw_ruler<T: Write>(io: &mut T, view: &View) -> Result<()> {
     )?)
 }
 
-fn draw_default_footer<T: Write>(io: &mut T, view: &View) -> Result<()> {
+fn draw_default_footer<T: Write>(io: &mut TerminalIO<T>, view: &View) -> Result<()> {
     draw_footer(
         io,
         view,
@@ -619,7 +661,12 @@ fn draw_default_footer<T: Write>(io: &mut T, view: &View) -> Result<()> {
     )
 }
 
-fn draw_footer<T: Write>(io: &mut T, view: &View, text: &str, background: Color) -> Result<()> {
+fn draw_footer<T: Write>(
+    io: &mut TerminalIO<T>,
+    view: &View,
+    text: &str,
+    background: Color,
+) -> Result<()> {
     // First we create the full footer, then we truncate, if needed
     let mut footer = text.to_owned();
 
@@ -634,21 +681,16 @@ fn draw_footer<T: Write>(io: &mut T, view: &View, text: &str, background: Color)
     } else {
         footer.push_str(" ".repeat(ncols - nchars).as_str())
     }
+    set_terminal_color(io, Some(background))?;
 
     Ok(queue!(
-        io,
-        SetBackgroundColor(background),
-        SetForegroundColor(Color::Black),
+        io.io,
         cursor::MoveTo(0, (view.term_nrows - 1) as u16),
         Print(footer),
-        ResetColor,
     )?)
 }
 
-// This function is the performance bottleneck, so I try to queue as little as
-// possible to the terminal by checking every single operation to see if it's
-// necessary
-fn draw_sequences<T: Write>(io: &mut T, view: &View) -> Result<()> {
+fn draw_sequences<T: Write>(io: &mut TerminalIO<T>, view: &View) -> Result<()> {
     if view.consensus {
         draw_consensus_sequences(io, view)?;
     } else {
@@ -657,7 +699,7 @@ fn draw_sequences<T: Write>(io: &mut T, view: &View) -> Result<()> {
     Ok(())
 }
 
-fn draw_nonconsensus_sequences<T: Write>(io: &mut T, view: &View) -> Result<()> {
+fn draw_nonconsensus_sequences<T: Write>(io: &mut TerminalIO<T>, view: &View) -> Result<()> {
     let row_range = match view.seq_row_range() {
         Some(n) => n,
         None => return Ok(()),
@@ -672,60 +714,36 @@ fn draw_nonconsensus_sequences<T: Write>(io: &mut T, view: &View) -> Result<()> 
         let seq = &view.seqs()[alnrow][col_range.clone()];
         draw_sequence(io, view.namewidth + 1, view.is_aa(), seq, termrow)?;
     }
-    Ok(queue!(io, ResetColor,)?)
+    Ok(())
 }
 
 fn draw_sequence<T: Write>(
-    io: &mut T,
+    io: &mut TerminalIO<T>,
     colstart: u16,
     is_aa: bool,
     seq: &[u8],
     termrow: u16,
 ) -> Result<()> {
-    queue!(io, cursor::MoveTo(colstart, termrow), ResetColor)?;
-    let mut oldcolor = None;
-    let mut is_foreground_black = false;
+    queue!(io.io, cursor::MoveTo(colstart, termrow))?;
     for byte in seq {
         let color = if is_aa {
             get_color_background_aa(*byte)
         } else {
             get_color_background_dna(*byte)
         };
-        // if color is same as before, don't queue up color changing operations
-        if color != oldcolor {
-            // If the current cell needs a background color, set it
-            if let Some(clr) = color {
-                // only set foreground to black if it isn't already
-                if !is_foreground_black {
-                    queue!(io, SetForegroundColor(Color::Black))?;
-                    is_foreground_black = true;
-                };
-                queue!(io, SetBackgroundColor(clr))?;
-            // Otherwise, reset to default color scheme
-            } else {
-                queue!(io, ResetColor)?;
-                is_foreground_black = false;
-            }
-        };
-        queue!(io, Print(*byte as char))?;
-        oldcolor = color;
+        set_terminal_color(io, color)?;
+        queue!(io.io, Print(*byte as char))?;
     }
     Ok(())
 }
 
 fn draw_top_consensus<T: Write>(
-    io: &mut T,
+    io: &mut TerminalIO<T>,
     colstart: u16,
     is_aa: bool,
     seq: &[Option<u8>],
 ) -> Result<()> {
-    queue!(
-        io,
-        cursor::MoveTo(colstart, HEADER_LINES as u16),
-        ResetColor
-    )?;
-    let mut old_background_color = None;
-    let mut is_foreground_black = false;
+    queue!(io.io, cursor::MoveTo(colstart, HEADER_LINES as u16),)?;
     for maybe_base in seq {
         let (background_color, symbol) = if let Some(byte) = maybe_base {
             let bc = if is_aa {
@@ -737,35 +755,21 @@ fn draw_top_consensus<T: Write>(
         } else {
             (None, ' ')
         };
-        if background_color != old_background_color {
-            if let Some(clr) = background_color {
-                if !is_foreground_black {
-                    queue!(io, SetForegroundColor(Color::Black))?;
-                    is_foreground_black = true;
-                }
-                queue!(io, SetBackgroundColor(clr))?;
-            } else {
-                queue!(io, ResetColor)?;
-                is_foreground_black = false;
-            }
-        }
-        queue!(io, Print(symbol))?;
-        old_background_color = background_color;
+        set_terminal_color(io, background_color)?;
+        queue!(io.io, Print(symbol))?;
     }
     Ok(())
 }
 
 fn draw_consensus_other_seq<T: Write>(
-    io: &mut T,
+    io: &mut TerminalIO<T>,
     colstart: u16,
     termrow: u16,
     is_aa: bool,
     seq: &[u8],
     cons: &[Option<u8>],
 ) -> Result<()> {
-    queue!(io, cursor::MoveTo(colstart, termrow), ResetColor)?;
-    let mut oldcolor = None;
-    let mut is_foreground_black = false;
+    queue!(io.io, cursor::MoveTo(colstart, termrow))?;
     for (byte, maybe_cons) in seq.iter().zip(cons.iter()) {
         let (color, symbol) =
             if maybe_cons.is_some() && maybe_cons.unwrap() & 0b11011111 == byte & 0b11011111 {
@@ -778,25 +782,13 @@ fn draw_consensus_other_seq<T: Write>(
                 };
                 (color, *byte as char)
             };
-        if color != oldcolor {
-            if let Some(clr) = color {
-                if !is_foreground_black {
-                    queue!(io, SetForegroundColor(Color::Black))?;
-                    is_foreground_black = true;
-                }
-                queue!(io, SetBackgroundColor(clr))?;
-            } else {
-                queue!(io, ResetColor)?;
-                is_foreground_black = false;
-            }
-        }
-        queue!(io, Print(symbol))?;
-        oldcolor = color;
+        set_terminal_color(io, color)?;
+        queue!(io.io, Print(symbol))?;
     }
     Ok(())
 }
 
-fn draw_consensus_sequences<T: Write>(io: &mut T, view: &View) -> Result<()> {
+fn draw_consensus_sequences<T: Write>(io: &mut TerminalIO<T>, view: &View) -> Result<()> {
     let col_range = match view.seq_col_range() {
         Some(n) => n,
         None => return Ok(()),
@@ -814,17 +806,19 @@ fn draw_consensus_sequences<T: Write>(io: &mut T, view: &View) -> Result<()> {
             draw_consensus_other_seq(io, view.namewidth + 1, termrow, view.is_aa(), seq, cons_seq)?
         }
     }
-    Ok(queue!(io, ResetColor,)?)
+    Ok(())
 }
 
 fn draw_highlight<T: Write>(
-    io: &mut T,
+    io: &mut TerminalIO<T>,
     screenrow: u16,
     screencol: u16,
     maxcols: u16,
     text: &str,
 ) -> Result<()> {
     let max_len = (maxcols - screencol) as usize;
+
+    // Truncate to max_len
     let truncated = if text.len() > max_len {
         if text.is_ascii() {
             &text[0..max_len]
@@ -841,13 +835,11 @@ fn draw_highlight<T: Write>(
     } else {
         text
     };
+    set_terminal_color(io, Some(Color::White))?;
     Ok(queue!(
-        io,
-        SetBackgroundColor(Color::White),
-        SetForegroundColor(Color::Black),
+        io.io,
         cursor::MoveTo(screencol, screenrow),
         Print(truncated),
-        ResetColor,
     )?)
 }
 
@@ -903,11 +895,14 @@ fn main() {
             std::process::exit(1);
         }
         Ok(mut view) => {
-            let mut io = stdout();
+            let mut io = TerminalIO {
+                io: stdout(),
+                color: None,
+            };
             if let Err(e) = display(&mut io, &mut view) {
                 println!("Error: {}", e);
             }
-            clean_terminal(&mut io).unwrap();
+            clean_terminal(&mut io.io).unwrap();
             std::process::exit(0);
         }
     }
