@@ -17,7 +17,7 @@ Simple usage:
 $ alen /path/to/alignment.fasta
 ```
 
-Note that Alen loads in the entire alignment in memory, so don't use it for multi-gigabyte files. Alen will auto-detect whether the alignment is protein or amino acid alignments. For more help, type `alen --help` in the terminal.
+Note that Alen loads in the entire alignment into memory, so don't use it for multi-gigabyte files. Alen will auto-detect whether the alignment is a nucleotide or amino acid. For more help, type `alen --help` in the terminal.
 
 __Commands__
 

@@ -68,11 +68,9 @@ fn move_view_and_redraw<T: Write>(
     // Only update the view if the view was actually moved.
     if view.rowstart != old_rowstart {
         draw_names(io, view)?;
-        io.io.flush()?;
     }
     if view.colstart != old_colstart {
         draw_ruler(io, view)?;
-        io.io.flush()?;
     }
     if view.rowstart != old_rowstart || view.colstart != old_colstart {
         draw_sequences(io, view)?;
@@ -131,7 +129,6 @@ fn display<T: Write>(io: &mut TerminalIO<T>, view: &mut View) -> Result<()> {
     terminal::enable_raw_mode()?;
     execute!(io.io, terminal::EnterAlternateScreen, cursor::Hide,)?;
     draw_all(io, view)?;
-    io.io.flush()?;
 
     loop {
         let event = event::read()?;
@@ -272,7 +269,6 @@ fn display<T: Write>(io: &mut TerminalIO<T>, view: &mut View) -> Result<()> {
                     })
                 {
                     draw_all(io, view)?;
-                    io.io.flush()?;
                 };
 
                 // Shift to/from consensus view
@@ -294,7 +290,6 @@ fn display<T: Write>(io: &mut TerminalIO<T>, view: &mut View) -> Result<()> {
                     let delta = if view.consensus { 1 } else { -1 };
                     view.move_view(delta, 0);
                     draw_all(io, view)?;
-                    io.io.flush()?;
                 };
             }
             Event::Resize(ncols, nrows) => {
@@ -361,7 +356,10 @@ fn enter_jumpcol_mode<T: Write>(io: &mut TerminalIO<T>, view: &mut View) -> Resu
                         }
                     }
                     Err(_) => {
-                        unreachable!(); // should never happen, since we only accept numerical inputs
+                        // Since we only accepts input keys 0-9, this should only
+                        // happen if the user tries to input a number larger than
+                        // the max usize.
+                        invalid_column = true;
                     }
                 }
             }
@@ -848,14 +846,6 @@ fn draw_highlight<T: Write>(
     )?)
 }
 
-fn clean_terminal<T: Write>(io: &mut TerminalIO<T>) -> Result<()> {
-    if io.has_color {
-        queue!(io.io, ResetColor)?;
-    }
-    execute!(io.io, cursor::Show, terminal::LeaveAlternateScreen)?;
-    Ok(terminal::disable_raw_mode()?)
-}
-
 fn main() {
     let args = clap::App::new("Alen")
         .version("0.1")
@@ -883,7 +873,7 @@ fn main() {
             clap::Arg::with_name("monochrome")
                 .short("m")
                 .takes_value(false)
-                .help("Disable colors (may improve lag)"),
+                .help("Disable colors (monochrome, may improve lag)"),
         )
         .get_matches();
 
@@ -918,8 +908,13 @@ fn main() {
             if let Err(e) = display(&mut io, &mut view) {
                 println!("Error: {}", e);
             }
-            clean_terminal(&mut io).unwrap();
+            if io.has_color {
+                queue!(io.io, ResetColor).unwrap();
+            }
+            execute!(io.io, cursor::Show, terminal::LeaveAlternateScreen).unwrap();
+            terminal::disable_raw_mode().unwrap();
             std::process::exit(0);
         }
     }
 }
+ 
