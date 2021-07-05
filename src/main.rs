@@ -231,11 +231,12 @@ fn display<T: Write>(io: &mut TerminalIO<T>, view: &mut View) -> Result<()> {
                     == (KeyEvent {
                         code: KeyCode::Char('f'),
                         modifiers: event::KeyModifiers::CONTROL,
-                    }) || kevent
-                    == (KeyEvent {
-                        code: KeyCode::Char('F'),
-                        modifiers: event::KeyModifiers::CONTROL,
                     })
+                    || kevent
+                        == (KeyEvent {
+                            code: KeyCode::Char('F'),
+                            modifiers: event::KeyModifiers::CONTROL,
+                        })
                 {
                     enter_search_mode(io, view)?;
                     draw_default_footer(io, view)?;
@@ -246,11 +247,12 @@ fn display<T: Write>(io: &mut TerminalIO<T>, view: &mut View) -> Result<()> {
                     == (KeyEvent {
                         code: KeyCode::Char('j'),
                         modifiers: event::KeyModifiers::CONTROL,
-                    }) || kevent
-                    == (KeyEvent {
-                        code: KeyCode::Char('J'),
-                        modifiers: event::KeyModifiers::CONTROL,
                     })
+                    || kevent
+                        == (KeyEvent {
+                            code: KeyCode::Char('J'),
+                            modifiers: event::KeyModifiers::CONTROL,
+                        })
                 {
                     enter_jumpcol_mode(io, view)?;
                     draw_default_footer(io, view)?;
@@ -262,11 +264,12 @@ fn display<T: Write>(io: &mut TerminalIO<T>, view: &mut View) -> Result<()> {
                     == (KeyEvent {
                         code: KeyCode::Char('r'),
                         modifiers: event::KeyModifiers::NONE,
-                    }) || kevent
-                    == (KeyEvent {
-                        code: KeyCode::Char('R'),
-                        modifiers: event::KeyModifiers::NONE,
                     })
+                    || kevent
+                        == (KeyEvent {
+                            code: KeyCode::Char('R'),
+                            modifiers: event::KeyModifiers::NONE,
+                        })
                 {
                     draw_all(io, view)?;
                 };
@@ -276,11 +279,12 @@ fn display<T: Write>(io: &mut TerminalIO<T>, view: &mut View) -> Result<()> {
                     == (KeyEvent {
                         code: KeyCode::Char('c'),
                         modifiers: event::KeyModifiers::NONE,
-                    }) || kevent
-                    == (KeyEvent {
-                        code: KeyCode::Char('C'),
-                        modifiers: event::KeyModifiers::NONE,
                     })
+                    || kevent
+                        == (KeyEvent {
+                            code: KeyCode::Char('C'),
+                            modifiers: event::KeyModifiers::NONE,
+                        })
                 {
                     view.consensus = !view.consensus;
 
@@ -903,7 +907,7 @@ fn main() {
             let mut io = TerminalIO {
                 io: stdout(),
                 color: None,
-                has_color
+                has_color,
             };
             if let Err(e) = display(&mut io, &mut view) {
                 println!("Error: {}", e);
@@ -917,4 +921,3 @@ fn main() {
         }
     }
 }
- 
