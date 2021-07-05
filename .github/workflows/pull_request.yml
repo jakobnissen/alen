@@ -1,0 +1,58 @@
+name: Pull Request Check
+
+on:
+  pull_request: {}
+
+jobs:
+  # typical build with various feature combinations
+  check:
+    name: Check PR
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.experimental }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+        toolchain: [stable]
+        experimental: [false]
+        include:
+          - {toolchain: stable, os: windows-latest, experimental: false, flags: ""}
+          - {toolchain: stable, os: macos-latest, experimental: false, flags: ""}
+          - {toolchain: beta, os: ubuntu-latest, experimental: false, flags: ""}
+          - {toolchain: nightly, os: ubuntu-latest, experimental: true, flags: ""}
+      fail-fast: false
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v2
+    - name: Setup Toolchain
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: ${{matrix.toolchain}}
+        override: true
+    - name: Check
+      uses: actions-rs/cargo@v1
+      with:
+        command: check
+  # no-std builds are a bit more extensive to test
+  rustfmt:
+    name: Check Formatting
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v2
+    - name: Setup Toolchain
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        override: true
+        components: rustfmt, clippy
+    - name: Run Rustfmt
+      uses: actions-rs/cargo@v1
+      with:
+        command: fmt
+        args: -- --check
+    - name: Run Clippy
+      uses: actions-rs/cargo@v1
+      with:
+        command: clippy
+        args: -- -Dclippy::all
