@@ -605,7 +605,7 @@ fn draw_name<T: Write>(
     termrow: u16,
 ) -> Result<()> {
     let name = if namewidth == 0 {
-        "|".to_owned()
+        "│".to_owned()
     } else {
         let elide = graphemes.len() > namewidth as usize;
         let namelen = min(graphemes.len(), namewidth as usize - elide as usize);
@@ -616,7 +616,7 @@ fn draw_name<T: Write>(
             let missing_graphemes = namewidth as usize - graphemes.len();
             name.push_str(&" ".repeat(missing_graphemes));
         }
-        name.push('|');
+        name.push('│');
         name
     };
     queue!(io.io, cursor::MoveTo(0, termrow), Print(name),)?;
