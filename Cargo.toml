@@ -3,6 +3,9 @@ name = "alen"
 version = "0.2.0"
 authors = ["Jakob Nybo Nissen <jakobnybonissen@gmail.com>"]
 edition = "2018"
+license = "MIT"
+readme = "README.md"
+description = "A command-like program to view DNA or protein alignments in FASTA formats."
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
