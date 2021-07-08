@@ -1,12 +1,13 @@
-name: Pull Request Check
+name: Build and Test
 
 on:
   pull_request: {}
+  push:
+    branches: [ master ]
 
 jobs:
-  # typical build with various feature combinations
-  check:
-    name: Check PR
+  matrix-build:
+    name: Build
     runs-on: ${{ matrix.os }}
     continue-on-error: ${{ matrix.experimental }}
     strategy:
@@ -28,13 +29,32 @@ jobs:
       with:
         toolchain: ${{matrix.toolchain}}
         override: true
-    - name: Check
+    - name: Build
       uses: actions-rs/cargo@v1
       with:
-        command: check
-  # no-std builds are a bit more extensive to test
+        command: build
+  linux-static:
+    name: Static Build (Linux x86_64)
+    runs-on: ubuntu-latest
+    continue-on-error: false
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v2
+    - name: Setup Toolchain
+      uses: actions-rs/toolchain@v1
+      with:
+        target: x86_64-unknown-linux-musl
+        toolchain: stable
+        override: true
+    - name: Install Musl
+      run: sudo apt install -f musl-dev
+    - name: Build
+      uses: actions-rs/cargo@v1
+      with:
+        command: build
+        args: --target x86_64-unknown-linux-musl
   rustfmt:
-    name: Check Formatting
+    name: Formatting and Style
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
