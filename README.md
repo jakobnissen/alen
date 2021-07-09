@@ -2,6 +2,11 @@
 
 Simple terminal sequence alignment viewer.
 
+![GitHub release](https://img.shields.io/github/release/jakobnissen/alen.svg)
+![GitHub Last Commit](https://img.shields.io/github/last-commit/jakobnissen/alen.svg)
+[![Github Actions Status](https://img.shields.io/github/workflow/status/jakobnissen/alen/Build%20and%20Test)](https://github.com/jakobnissen/alen/actions)
+
+
 ![Screenshot](/screenshots/prot.png?raw=true "Screenshot")
 
 ### What is Alen?
