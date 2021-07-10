@@ -1,0 +1,123 @@
+name: Draft Release
+
+on:
+  create:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+**'
+
+jobs:
+  draft_release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    continue-on-error: false
+    outputs:
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
+      current_tag: ${{ steps.tag_names.outputs.current_tag }}
+      prev_tag: ${{ steps.tag_names.outputs.prev_tag }}
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: 0  # needed for all tags
+
+      - name: Find Tag Names
+        id: tag_names
+        run: |
+          TAG_REF=${GITHUB_REF/refs\/tags\//}
+          echo "Current tag: $TAG_REF"
+          echo ::set-output name=current_tag::${TAG_REF}
+          PREV_TAG_REF=$(git tag --list --sort=refname 'v[0-9]*' | grep "${TAG_REF}" -B1 | head -n1)
+          echo "Previous tag: $PREV_TAG_REF"
+          echo "prev_tag=$PREV_TAG_REF" >>$GITHUB_ENV
+          echo ::set-output name=prev_tag::${PREV_TAG_REF}
+
+      - name: Generate ChangeLog
+        run: |
+          COMMITS=`git log --pretty='%s' --no-merges $prev_tag... | wc -l`
+          echo "Found $COMMITS commits since $prev_tag"
+          [ $COMMITS -gt 0 ] || exit 2
+          echo "**Changes since $prev_tag:**" >> release.txt
+          git log --pretty='%s' --no-merges $prev_tag... | sed -e 's/^/ - /;' >>release.txt
+
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: ${{ github.ref }}
+          body_path: release.txt
+          draft: true
+          prerelease: false
+
+  linux:
+    name: Linux Release
+    runs-on: ubuntu-latest
+    continue-on-error: false
+    needs: draft_release
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v2
+    - name: Setup Toolchain
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        target: x86_64-unknown-linux-musl
+    - name: Build
+      uses: actions-rs/cargo@v1
+      with:
+        command: build
+        args: --release --target x86_64-unknown-linux-musl
+    - name: Prepare Linux Binary
+      run: |
+        ZIP_FILE=alen-${{ needs.draft_release.outputs.current_tag }}-linux-amd64.zip
+        echo "ZIP_FILE=$ZIP_FILE" >> $GITHUB_ENV
+        mkdir -p zip/bin
+        mv target/x86_64-unknown-linux-musl/release/alen zip/bin
+        mkdir -p zip/share/alen
+        cp LICENSE README.md zip/share/alen
+        (cd zip/ && zip -r ../$ZIP_FILE .)
+    - name: Upload Asset Linux Binary
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ needs.draft_release.outputs.upload_url }}
+        asset_path: ${{ env.ZIP_FILE }}
+        asset_name: ${{ env.ZIP_FILE }}
+        asset_content_type: application/octet-stream
+
+  macos:
+    name: MacOS Release
+    runs-on: macos-latest
+    continue-on-error: false
+    needs: draft_release
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v2
+    - name: Setup Toolchain
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+    - name: Build
+      uses: actions-rs/cargo@v1
+      with:
+        command: build
+        args: --release
+    - name: Prepare MacOS Binary
+      run: |
+        ZIP_FILE=alen-${{ needs.draft_release.outputs.current_tag }}-osx.zip
+        echo "ZIP_FILE=$ZIP_FILE" >> $GITHUB_ENV
+        mkdir zip
+        mv target/release/alen zip/
+        cp LICENSE README.md zip/
+        (cd zip/ && zip -r ../$ZIP_FILE .)
+    - name: Upload Asset MacOS Binary
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ needs.draft_release.outputs.upload_url }}
+        asset_path: ${{ env.ZIP_FILE }}
+        asset_name: ${{ env.ZIP_FILE }}
+        asset_content_type: application/octet-stream
