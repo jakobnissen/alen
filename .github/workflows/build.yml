@@ -18,8 +18,6 @@ jobs:
         include:
           - {toolchain: stable, os: windows-latest, experimental: false, flags: ""}
           - {toolchain: stable, os: macos-latest, experimental: false, flags: ""}
-          - {toolchain: beta, os: ubuntu-latest, experimental: false, flags: ""}
-          - {toolchain: nightly, os: ubuntu-latest, experimental: true, flags: ""}
       fail-fast: false
     steps:
     - name: Checkout
