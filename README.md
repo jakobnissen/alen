@@ -14,7 +14,10 @@ It's a command-like program to view DNA or protein alignments in FASTA formats. 
 
 ### How to install and run.
 Alen _should_ work on most Unix systems, and Windows 10. If someone asks me to, I might add Windows 7 and 8 support.
-You can get it by downloading it from here and compiling it using Cargo. If people ask me to, I might upload precompiled binaries.
+
+The easiest way to get it is to download the latest release from the [releases page](https://github.com/jakobnissen/alen/releases) (binaries are not yet available for Windows).
+
+Alternatively, you can download the source code from this repo and compile it yourself using `cargo build --release`.
 
 ### How to use
 Simple usage:
@@ -26,7 +29,7 @@ Note that Alen loads in the entire alignment into memory, so don't use it for mu
 
 __Commands__
 
-* `Esc / q / Control-C`: Quit
+* `Esc / q / Ctrl-C`: Quit
 * `c`: Toggle consensus sequence comparison
 * `r`: Re-render the screen.
 * `Ctrl-f`: Search. Searches headers, then sequences for regex, case insensitively.
