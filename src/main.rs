@@ -17,6 +17,8 @@ use std::path::Path;
 
 use anyhow::Result;
 
+use gumdrop::Options;
+
 use regex::RegexBuilder;
 
 use unicode_segmentation::UnicodeSegmentation;
@@ -850,41 +852,36 @@ fn draw_highlight<T: Write>(
     )?)
 }
 
-fn main() {
-    let args = clap::App::new("Alen")
-        .version("0.1")
-        .author("Jakob Nybo Nissen <jakobnybonissen@gmail.com>")
-        .about("Simple terminal alignment viewer")
-        .arg(
-            clap::Arg::with_name("alignment")
-                .help("Input alignment in FASTA format")
-                .takes_value(true)
-                .required(true),
-        )
-        .arg(
-            clap::Arg::with_name("uppercase")
-                .short("u")
-                .takes_value(false)
-                .help("Displays sequences in uppercase"),
-        )
-        .arg(
-            clap::Arg::with_name("aminoacids")
-                .short("a")
-                .takes_value(false)
-                .help("Force parsing as amino acids"),
-        )
-        .arg(
-            clap::Arg::with_name("monochrome")
-                .short("m")
-                .takes_value(false)
-                .help("Disable colors (monochrome, may improve lag)"),
-        )
-        .get_matches();
+#[derive(Options)]
+struct AlenOptions {
+    #[options(help = "print help message")]
+    help: bool,
 
-    let filename = args.value_of("alignment").unwrap();
+    #[options(help = "Display sequences in uppercase")]
+    uppercase: bool,
+
+    #[options(help = "Force parsing as amino acids")]
+    aminoacids: bool,
+
+    #[options(help = "Disable colors (monochrome, may improve lag)")]
+    monochrome: bool,
+
+    #[options(free)]
+    alignment: Vec<String>,
+}
+
+fn main() {
+    let args = AlenOptions::parse_args_default_or_exit();
+
+    let filename = if args.alignment.len() != 1 {
+        println!("{}", AlenOptions::usage());
+        std::process::exit(1);
+    } else {
+        args.alignment[0].clone()
+    };
 
     // Check if file exists
-    if filename != "-" && !Path::new(filename).is_file() {
+    if filename != "-" && !Path::new(&filename).is_file() {
         println!("ERROR: Filename not found: \"{}\"", filename);
         std::process::exit(1);
     }
@@ -894,10 +891,7 @@ fn main() {
     });
 
     let buffered_io = BufReader::new(file);
-    let uppercase = args.is_present("uppercase");
-    let must_aa = args.is_present("aminoacids");
-    let has_color = !args.is_present("monochrome");
-    let view = View::from_reader(BufReader::new(buffered_io), uppercase, must_aa);
+    let view = View::from_reader(BufReader::new(buffered_io), args.uppercase, args.aminoacids);
     match view {
         Err(e) => {
             println!("ERROR when loading FASTA: {}", e);
@@ -907,7 +901,7 @@ fn main() {
             let mut io = TerminalIO {
                 io: stdout(),
                 color: None,
-                has_color,
+                has_color: !args.monochrome,
             };
             if let Err(e) = display(&mut io, &mut view) {
                 println!("Error: {}", e);
