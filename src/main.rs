@@ -99,7 +99,7 @@ fn get_color_background_aa(byte: u8) -> Option<Color> {
 
         // Positive (blues)
         b'r' | b'R' => Some(Color::AnsiValue(39)),
-        b'k' | b'K' => Some(Color::AnsiValue(26)),
+        b'k' | b'K' => Some(Color::AnsiValue(27)),
         b'h' | b'H' => Some(Color::AnsiValue(32)),
 
         // Aromatic (yellows)
