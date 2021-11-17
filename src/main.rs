@@ -645,7 +645,11 @@ fn draw_ruler<T: Write>(io: &mut TerminalIO<T>, view: &View) -> Result<()> {
     // Make the bottom line with the ticks
     let tick_string = {
         let aln_range = view.colstart..=(view.colstart + view.seq_ncols_display() - 1);
-        let mut tick_string = "┌".to_owned();
+        let mut tick_string = if view.colstart % 10 == 0 {
+            "├"
+        } else {
+            "┌"
+        }.to_owned();
         for alncol in aln_range {
             tick_string.push(if (alncol + 1) % 10 == 0 { '┴' } else { '─' })
         }
