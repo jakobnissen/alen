@@ -6,7 +6,6 @@ Simple terminal sequence alignment viewer.
 ![GitHub Last Commit](https://img.shields.io/github/last-commit/jakobnissen/alen.svg)
 [![Github Actions Status](https://img.shields.io/github/workflow/status/jakobnissen/alen/Build%20and%20Test)](https://github.com/jakobnissen/alen/actions)
 
-
 ![Screenshot](/screenshots/prot.png?raw=true "Screenshot")
 
 ### What is Alen?
@@ -32,8 +31,9 @@ __Commands__
 * `Esc / q / Ctrl-C`: Quit
 * `c`: Toggle consensus sequence comparison
 * `r`: Re-render the screen.
-* `Ctrl-f`: Search. Searches headers, then sequences for regex, case insensitively.
+* `Ctrl-f`: Find. Searches headers, then sequences for regex, case insensitively.
 * `Ctrl-j`: Jump to column.
+* `Ctrl-s`: Select rows and move them around.
 * `Arrow keys`: Move 1 column/row
 * `Shift-Arrow keys`: Move 10 columns/rows
 * `Ctrl-Arrow keys`: Move to first/last column/row

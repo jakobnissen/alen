@@ -1,5 +1,3 @@
-// To do: Needs a refactor or two. This is turning into spaghetti code.
-
 // To do: More formats?
 // To do: Make stdin work on MacOS
 // To do: Implement multithreading. One thread reads input and moves view etc,
