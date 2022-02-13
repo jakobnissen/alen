@@ -157,6 +157,41 @@ fn calculate_consensus(seqs: &[Vec<u8>], is_aa: bool) -> Vec<Option<u8>> {
     result
 }
 
+fn move_element<T>(v: &mut Vec<T>, from: usize, to: usize) -> Option<()> {
+    if from.max(to) >= v.len() {
+        return None;
+    }
+    if from == to {
+        return Some(());
+    }
+    let mut i = from;
+    let delta: isize = if to > from { 1 } else { -1 };
+    while i != to {
+        let i2 = (i as isize + delta) as usize;
+        v.swap(i, i2);
+        i = i2;
+    }
+    Some(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_move_element() {
+        let mut v = vec![1, 2, 3, 4, 5];
+        move_element(&mut v, 1, 3);
+        assert_eq!(v, vec![1, 3, 4, 2, 5]);
+        move_element(&mut v, 3, 1);
+        assert_eq!(v, vec![1, 2, 3, 4, 5]);
+        assert_eq!(move_element(&mut v, 0, 5), None);
+        assert_eq!(v, vec![1, 2, 3, 4, 5]);
+        move_element(&mut v, 3, 0);
+        assert_eq!(v, vec![4, 1, 2, 3, 5]);
+    }
+}
+
 pub struct Alignment {
     graphemes: Vec<Graphemes>,
     // longest as in number of graphemes. We cache this for efficiency, it can be
@@ -247,7 +282,7 @@ pub struct View {
     pub colstart: usize,
     pub term_nrows: u16, // obtained from terminal
     pub term_ncols: u16,
-    pub namewidth: u16,
+    pub namewidth: u16,  // number of graphemes of each name displayed
     pub consensus: bool, // if consensus view is shown
     aln: Alignment,
 }
@@ -322,6 +357,20 @@ impl View {
             self.seq_ncols_display() as usize,
             self.ncols(),
         );
+    }
+
+    // Returns None if operation failed, Some(()) otherwise
+    pub fn move_row(&mut self, from: usize, to: usize) -> Option<()> {
+        match move_element(&mut self.aln.graphemes, from, to) {
+            Some(_) => {
+                // If the first succeeds, the other MUST also succeed,
+                // else the fields go out of synch and we must panic
+                move_element(&mut self.aln.seqs, from, to).unwrap();
+                move_element(&mut self.aln.consensus, from, to).unwrap();
+                Some(())
+            }
+            None => None,
+        }
     }
 
     pub fn resize_names(&mut self, delta: isize) {
