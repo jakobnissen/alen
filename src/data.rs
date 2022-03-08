@@ -124,8 +124,8 @@ fn calculate_consensus(seqs: &[Vec<u8>], is_aa: bool) -> Vec<Option<u8>> {
     let mut counts = vec![[0u32; 82]; ncols];
 
     // First loop over sequneces in memory order
-    for (seq, arr) in seqs.iter().zip(&mut counts) {
-        for byte in seq {
+    for seq in seqs.iter() {
+        for (byte, arr) in seq.iter().zip(counts.iter_mut()) {
             // Unset third bit to uppercase ASCII letters, 10 is offset ('*' char)
             let index = (byte & 0b11011111) - offset;
             arr[index as usize] += 1;
