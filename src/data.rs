@@ -86,9 +86,9 @@ fn verify_alphabet(seqs: &[Vec<u8>], graphemes_vec: &[Graphemes], must_aa: bool)
     let dna_alphabet = Alphabet::new(b"-ACMGRSVTUWYHKDBNacmgrsvtuwyhkdbn");
     let aa_alphabet = Alphabet::new(b"*-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz");
 
-    let mut valid_dna = true;
+    let mut valid_dna = !must_aa;
     for (seq, graphemes) in seqs.iter().zip(graphemes_vec) {
-        if !must_aa && valid_dna {
+        if valid_dna {
             let isdna = dna_alphabet.is_word(seq);
             valid_dna &= isdna;
             // If it's DNA, it's definitely also AA
@@ -103,7 +103,7 @@ fn verify_alphabet(seqs: &[Vec<u8>], graphemes_vec: &[Graphemes], must_aa: bool)
             ));
         }
     }
-    Ok(must_aa | !valid_dna)
+    Ok(!valid_dna)
 }
 
 fn make_uppercase(seqs: &mut [Vec<u8>]) {
