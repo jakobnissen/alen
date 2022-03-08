@@ -228,7 +228,7 @@ impl Alignment {
         for result in reader.records() {
             let record = result?;
             let header = Graphemes::new(record.id());
-            let seq = record.seq().iter().copied().collect::<Vec<_>>();
+            let seq = record.seq().to_vec();
 
             // Check identical sequence lengths
             if let Some(len) = seqlength {
