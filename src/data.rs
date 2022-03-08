@@ -113,48 +113,57 @@ fn make_uppercase(seqs: &mut [Vec<u8>]) {
 }
 
 fn calculate_consensus(seqs: &[Vec<u8>], is_aa: bool) -> Vec<Option<u8>> {
-    // We know the sequences are ASCII, and we upper-case them, so the largest
-    // character is 'Z'
-    let mut counts = [0u32; 96];
+    // We have verified seq is *, - or A-Z. We uppercase, by masking 3rd bit, meaning
+    // element value is in range 10..=90, pad to 82 elements for alignment.
+    let offset = b'*' & 0b11011111;
     let ncols = seqs[0].len();
-    let mut result = Vec::with_capacity(ncols);
-    for col in 0..ncols {
-        counts.fill(0u32);
-        for seq in seqs.iter() {
-            // Unset third bit to uppercase ASCII letters
-            counts[seq[col] as usize & 0b11011111] += 1;
-        }
+    let mut counts = vec![[0u32; 82]; ncols];
 
-        // We set all ambiguous bases/AAs to 0.
-        // These are useless in the consensus
+    // First loop over sequneces in memory order
+    for (seq, arr) in seqs.iter().zip(&mut counts) {
+        for byte in seq {
+            // Unset third bit to uppercase ASCII letters, 10 is offset ('*' char)
+            let index = (byte & 0b11011111) - offset;
+            arr[index as usize] += 1;
+        }
+    }
+
+    // We set all ambiguous bases/AAs to 0.
+    // These are useless in the consensus
+    for arr in counts.iter_mut() {
         for &i in if is_aa {
             b"BJOUXZZZZZZ"
         } else {
             b"MRSVWYHKDBN"
         } {
-            counts[i as usize] = 0;
+            arr[(i - offset) as usize] = 0;
         }
-        let (mut most_common_byte, count) = counts
-            .iter()
-            .enumerate()
-            .max_by_key(|(_, &x)| x)
-            .map(|(i, cnt)| (i as u8, cnt))
-            .unwrap();
-
-        // If the most common is * or -, it becomes \n and \r after unsetting the bit.
-        most_common_byte = match most_common_byte {
-            b'\r' => b'-',
-            b'\n' => b'*',
-            _ => most_common_byte,
-        };
-
-        result.push(if *count == 0 {
-            None
-        } else {
-            Some(most_common_byte)
-        });
     }
-    result
+
+    return counts
+        .iter()
+        .map(|arr| {
+            let (mut most_common_byte, count) = arr
+                .iter()
+                .enumerate()
+                .max_by_key(|(_, &x)| x)
+                .map(|(i, cnt)| (i as u8 + offset, cnt))
+                .unwrap();
+
+            // If the most common is * or -, it becomes \n and \r after unsetting the bit.
+            most_common_byte = match most_common_byte {
+                b'\r' => b'-',
+                b'\n' => b'*',
+                _ => most_common_byte,
+            };
+
+            if *count == 0 {
+                None
+            } else {
+                Some(most_common_byte)
+            }
+        })
+        .collect();
 }
 
 fn move_element<T>(v: &mut Vec<T>, from: usize, to: usize) -> Option<()> {
