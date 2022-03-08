@@ -13,7 +13,6 @@ use crossterm::terminal;
 
 use bio::alphabets::Alphabet;
 use bio::io::fasta;
-
 /// A string that is separated into its constituent graphemes, used for printing
 /// with uniform width.
 /// The point of this struct is to avoid doing grapheme computations on ASCII
@@ -90,7 +89,12 @@ fn verify_alphabet(seqs: &[Vec<u8>], graphemes_vec: &[Graphemes], must_aa: bool)
     let mut valid_dna = true;
     for (seq, graphemes) in seqs.iter().zip(graphemes_vec) {
         if !must_aa && valid_dna {
-            valid_dna &= dna_alphabet.is_word(seq);
+            let isdna = dna_alphabet.is_word(seq);
+            valid_dna &= isdna;
+            // If it's DNA, it's definitely also AA
+            if isdna {
+                continue;
+            }
         }
         if !aa_alphabet.is_word(seq) {
             return Err(anyhow!(
@@ -250,7 +254,6 @@ impl Alignment {
 
         // Verify alphabet
         let is_aa = verify_alphabet(&seqs, &graphemes, must_aa)?;
-
         // Turn uppercase if requested
         if uppercase {
             make_uppercase(&mut seqs);
@@ -259,7 +262,6 @@ impl Alignment {
         if seqlength.map_or(true, |i| i < 1) {
             return Err(anyhow!("Alignment has no seqs, or seqs have length 0."));
         }
-
         let consensus = calculate_consensus(&seqs, is_aa);
 
         let longest_name = graphemes.iter().map(|v| v.len()).max().unwrap();
