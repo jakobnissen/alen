@@ -89,11 +89,10 @@ fn verify_alphabet(seqs: &[Vec<u8>], graphemes_vec: &[Graphemes], must_aa: bool)
     let mut valid_dna = !must_aa;
     for (seq, graphemes) in seqs.iter().zip(graphemes_vec) {
         if valid_dna {
-            let isdna = dna_alphabet.is_word(seq);
-            valid_dna &= isdna;
-            // If it's DNA, it's definitely also AA
-            if isdna {
-                continue;
+            if dna_alphabet.is_word(seq) {
+                continue
+            } else {
+                valid_dna = false;
             }
         }
         if !aa_alphabet.is_word(seq) {
@@ -117,18 +116,22 @@ fn make_uppercase(seqs: &mut [Vec<u8>]) {
 }
 
 fn calculate_consensus(seqs: &[Vec<u8>], is_aa: bool) -> Vec<Option<u8>> {
-    // We have verified seq is *, - or A-Z. We uppercase, by masking 3rd bit, meaning
-    // element value is in range 10..=90, pad to 82 elements for alignment.
-    let offset = b'*' & 0b11011111;
+    // We have verified seq is *, - or A-Z, a-z. We uppercase, by masking 3rd bit.
+    // * and - are 27th and 28th elements, giving us 28 possible elements total
+    let offset = b'A';
     let ncols = seqs[0].len();
-    let mut counts = vec![[0u32; 82]; ncols];
+    let mut counts = vec![[0u32; 28]; ncols];
 
     // First loop over sequneces in memory order
     for seq in seqs.iter() {
         for (byte, arr) in seq.iter().zip(counts.iter_mut()) {
             // Unset third bit to uppercase ASCII letters, 10 is offset ('*' char)
-            let index = (byte & 0b11011111) - offset;
-            arr[index as usize] += 1;
+            let index = match byte {
+                b'*' => 26,
+                b'-' => 27,
+                b => (b - offset) as usize
+            };
+            arr[index] += 1
         }
     }
 
@@ -156,8 +159,8 @@ fn calculate_consensus(seqs: &[Vec<u8>], is_aa: bool) -> Vec<Option<u8>> {
 
             // If the most common is * or -, it becomes \n and \r after unsetting the bit.
             most_common_byte = match most_common_byte {
-                b'\r' => b'-',
-                b'\n' => b'*',
+                b'[' => b'*',
+                b'\\' => b'-',
                 _ => most_common_byte,
             };
 
@@ -211,7 +214,8 @@ pub struct Alignment {
     // computed from the graphemes field easily
     longest_name: usize,
     seqs: Vec<Vec<u8>>,
-    consensus: Vec<Option<u8>>,
+    // we calculate this lazily upon demand
+    consensus: Option<Vec<Option<u8>>>,
     is_aa: bool,
 }
 
@@ -262,14 +266,13 @@ impl Alignment {
         if seqlength.map_or(true, |i| i < 1) {
             return Err(anyhow!("Alignment has no seqs, or seqs have length 0."));
         }
-        let consensus = calculate_consensus(&seqs, is_aa);
 
         let longest_name = graphemes.iter().map(|v| v.len()).max().unwrap();
         Ok(Alignment {
             graphemes,
             longest_name,
             seqs,
-            consensus,
+            consensus: None,
             is_aa,
         })
     }
@@ -329,8 +332,16 @@ impl View {
         &self.aln.seqs
     }
 
-    pub fn consensus(&self) -> &Vec<Option<u8>> {
-        &self.aln.consensus
+    pub fn consensus(&self) -> Option<&Vec<Option<u8>>> {
+        if let Some(v) = &self.aln.consensus {
+            Some(v)
+        } else {
+            None
+        }
+    }
+
+    pub fn calculate_consensus(&mut self) {
+        self.aln.consensus = Some(calculate_consensus(&self.aln.seqs, self.is_aa()))
     }
 
     pub fn is_aa(&self) -> bool {
@@ -377,7 +388,9 @@ impl View {
                 // If the first succeeds, the other MUST also succeed,
                 // else the fields go out of synch and we must panic
                 move_element(&mut self.aln.seqs, from, to).unwrap();
-                move_element(&mut self.aln.consensus, from, to).unwrap();
+                if let Some(v) = &mut self.aln.consensus {
+                    move_element(v, from, to).unwrap();
+                }
                 Some(())
             }
             None => None,

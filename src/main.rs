@@ -317,7 +317,9 @@ fn draw_consensus_sequences<T: Write>(io: &mut TerminalIO<T>, view: &View) -> Re
     };
 
     // First draw top row
-    let cons_seq = &view.consensus()[col_range.clone()];
+    let x = view.consensus().unwrap();
+    let cons_seq = &x[col_range.clone()];
+    //let cons_seq = &view.consensus().unwrap().as_ref()[col_range.clone()];
     draw_top_consensus(io, view.namewidth + 1, view.is_aa(), cons_seq)?;
 
     // Then draw rest, if applicable
@@ -683,6 +685,16 @@ fn default_loop<T: Write>(io: &mut TerminalIO<T>, view: &mut View) -> Result<()>
                             modifiers: event::KeyModifiers::NONE,
                         })
                 {
+                    if view.consensus().is_none() {
+                        execute!(
+                            io.io,
+                            ResetColor,
+                            terminal::Clear(ClearType::All),
+                            cursor::MoveTo(0, 0),
+                            Print("Calculating consensus..."),
+                        )?;
+                        view.calculate_consensus()
+                    }
                     view.consensus = !view.consensus;
 
                     // Setting consensus moves everything a tick down, so we
