@@ -35,15 +35,11 @@ impl Graphemes {
             // such that the first N graphemes of the string are encoded by
             // the bytes 0..=V[N-1].
             Some({
-                let mut v: Vec<usize> =
-                    UnicodeSegmentation::grapheme_indices(string.as_str(), true)
-                        .skip(1)
-                        // The iterator gives start indices, I assume end indices of the
-                        // previous grapheme is the previous byte
-                        .map(|(index, _grapheme)| index - 1)
-                        .collect();
-                // End byte of last grapheme is just the last byte-index of the string
-                v.push(string.len());
+                let v: Vec<usize> = UnicodeSegmentation::grapheme_indices(string.as_str(), true)
+                    // First is always 0
+                    .skip(1)
+                    .map(|(index, _grapheme)| index)
+                    .collect();
                 v
             })
         };
@@ -57,7 +53,7 @@ impl Graphemes {
     pub fn len(&self) -> usize {
         match &self.grapheme_stop_indices {
             None => self.string.len(), // if is ASCII
-            Some(n) => n.len(),
+            Some(n) => n.len() + 1,    // we skipped first one
         }
     }
 
@@ -73,7 +69,12 @@ impl Graphemes {
                     if n == 0 {
                         Some("")
                     } else {
-                        Some(&self.string[0..=v[n - 1]])
+                        let lastindex = if n == self.len() {
+                            self.string.len()
+                        } else {
+                            v[n]
+                        };
+                        Some(&self.string[0..lastindex])
                     }
                 }
             }
@@ -90,7 +91,7 @@ fn verify_alphabet(seqs: &[Vec<u8>], graphemes_vec: &[Graphemes], must_aa: bool)
     for (seq, graphemes) in seqs.iter().zip(graphemes_vec) {
         if valid_dna {
             if dna_alphabet.is_word(seq) {
-                continue
+                continue;
             } else {
                 valid_dna = false;
             }
@@ -129,7 +130,7 @@ fn calculate_consensus(seqs: &[Vec<u8>], is_aa: bool) -> Vec<Option<u8>> {
             let index = match byte {
                 b'*' => 26,
                 b'-' => 27,
-                b => (b - offset) as usize
+                b => (b - offset) as usize,
             };
             arr[index] += 1
         }
@@ -333,11 +334,7 @@ impl View {
     }
 
     pub fn consensus(&self) -> Option<&Vec<Option<u8>>> {
-        if let Some(v) = &self.aln.consensus {
-            Some(v)
-        } else {
-            None
-        }
+        self.aln.consensus.as_ref()
     }
 
     pub fn calculate_consensus(&mut self) {
