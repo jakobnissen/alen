@@ -12,6 +12,7 @@ use data::{Graphemes, View};
 use std::cmp::min;
 use std::io::{stdout, BufReader, Write};
 use std::path::Path;
+use std::ffi::OsString;
 
 use anyhow::Result;
 
@@ -1049,7 +1050,7 @@ fn draw_default_mode_screen<T: Write>(io: &mut TerminalIO<T>, view: &View) -> Re
 #[clap(version, author, about)]
 struct AlenOptions {
     /// Path to alignment
-    alignment: String,
+    alignment: OsString,
 
     /// Display sequences in uppercase
     #[clap(short)]
@@ -1069,7 +1070,7 @@ fn main() {
 
     // Check if file exists
     if args.alignment != "-" && !Path::new(&args.alignment).is_file() {
-        println!("ERROR: Filename not found: \"{}\"", args.alignment);
+        println!("ERROR: Filename not found: {:?}", args.alignment);
         std::process::exit(1);
     }
     let file = std::fs::File::open(args.alignment).unwrap_or_else(|err| {
