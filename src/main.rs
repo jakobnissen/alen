@@ -15,7 +15,7 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use gumdrop::Options;
+use clap::Parser;
 
 use regex::RegexBuilder;
 
@@ -1045,40 +1045,34 @@ fn draw_default_mode_screen<T: Write>(io: &mut TerminalIO<T>, view: &View) -> Re
     Ok(io.io.flush()?)
 }
 
-#[derive(Options)]
+#[derive(Parser)]
+#[clap(version, author, about)]
 struct AlenOptions {
-    #[options(help = "print help message")]
-    help: bool,
+    /// Path to alignment
+    alignment: String,
 
-    #[options(help = "Display sequences in uppercase")]
+    /// Display sequences in uppercase
+    #[clap(short)]
     uppercase: bool,
 
-    #[options(help = "Force parsing as amino acids")]
+    /// Force parsing as amino acids
+    #[clap(short)]
     aminoacids: bool,
 
-    #[options(help = "Disable colors (monochrome, may improve lag)")]
+    /// Disable colors (monochrome, may improve lag)
+    #[clap(short)]
     monochrome: bool,
-
-    #[options(free)]
-    alignment: Vec<String>,
 }
 
 fn main() {
-    let args = AlenOptions::parse_args_default_or_exit();
-
-    let filename = if args.alignment.len() != 1 {
-        println!("{}", AlenOptions::usage());
-        std::process::exit(1);
-    } else {
-        args.alignment[0].clone()
-    };
+    let args = AlenOptions::parse();
 
     // Check if file exists
-    if filename != "-" && !Path::new(&filename).is_file() {
-        println!("ERROR: Filename not found: \"{}\"", filename);
+    if args.alignment != "-" && !Path::new(&args.alignment).is_file() {
+        println!("ERROR: Filename not found: \"{}\"", args.alignment);
         std::process::exit(1);
     }
-    let file = std::fs::File::open(filename).unwrap_or_else(|err| {
+    let file = std::fs::File::open(args.alignment).unwrap_or_else(|err| {
         println!("ERROR reading file: {}", err);
         std::process::exit(1)
     });
