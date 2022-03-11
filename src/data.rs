@@ -106,16 +106,6 @@ fn verify_alphabet(seqs: &[Vec<u8>], graphemes_vec: &[Graphemes], must_aa: bool)
     Ok(!valid_dna)
 }
 
-fn make_uppercase(seqs: &mut [Vec<u8>]) {
-    // We exploit the fact that only [A-Za-z\-\*] is allowed. Uppercasing this
-    // means setting the third-to-top bit to 0. For - or *, we don't change the bit.
-    for seq in seqs.iter_mut() {
-        for byte in seq.iter_mut() {
-            *byte &= !(((*byte >= b'A') as u8) << 5)
-        }
-    }
-}
-
 fn calculate_consensus(seqs: &[Vec<u8>], is_aa: bool) -> Vec<Option<u8>> {
     // We have verified seq is *, - or A-Z, a-z. We uppercase, by masking 3rd bit.
     // * and - are 27th and 28th elements, giving us 28 possible elements total
@@ -126,11 +116,11 @@ fn calculate_consensus(seqs: &[Vec<u8>], is_aa: bool) -> Vec<Option<u8>> {
     // First loop over sequneces in memory order
     for seq in seqs.iter() {
         for (byte, arr) in seq.iter().zip(counts.iter_mut()) {
-            // Unset third bit to uppercase ASCII letters, 10 is offset ('*' char)
             let index = match byte {
                 b'*' => 26,
                 b'-' => 27,
-                b => (b - offset) as usize,
+                // Unset third bit to uppercase ASCII letters
+                b => ((b & 0b11011111) - offset) as usize,
             };
             arr[index] += 1
         }
@@ -257,12 +247,13 @@ impl Alignment {
             seqs.push(seq);
         }
 
-        // Verify alphabet
-        let is_aa = verify_alphabet(&seqs, &graphemes, must_aa)?;
         // Turn uppercase if requested
         if uppercase {
-            make_uppercase(&mut seqs);
+            seqs.iter_mut().for_each(|s| s.make_ascii_uppercase());
         }
+
+        // Verify alphabet
+        let is_aa = verify_alphabet(&seqs, &graphemes, must_aa)?;
 
         if seqlength.map_or(true, |i| i < 1) {
             return Err(anyhow!("Alignment has no seqs, or seqs have length 0."));
