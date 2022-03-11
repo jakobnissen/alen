@@ -10,9 +10,9 @@ use constants::HEADER_LINES;
 use data::{Graphemes, View};
 
 use std::cmp::min;
+use std::ffi::OsString;
 use std::io::{stdout, BufReader, Write};
 use std::path::Path;
-use std::ffi::OsString;
 
 use anyhow::Result;
 
