@@ -208,6 +208,7 @@ pub struct Alignment {
     // we calculate this lazily upon demand
     consensus: Option<Vec<Option<u8>>>,
     is_aa: bool,
+    ordered: bool,
 }
 
 impl Alignment {
@@ -266,7 +267,97 @@ impl Alignment {
             seqs,
             consensus: None,
             is_aa,
+            ordered: false
         })
+    }
+
+    /// Reorder the vectors of the alignment such that similar rows are next to each other.
+    fn order(&mut self) {
+        // If already ordered or 2 or fewer rows, ordering doesn't matter
+        if self.ordered || self.nrows() < 3 {
+            return;
+        }
+
+        // Choices only appear when placing the 3rd seq, so first two are given.
+        let mut order: Vec<usize> = vec![0, 1];
+        let mut neighbor_distances = vec![jaccard_distance(&self.seqs[0], &self.seqs[1])];
+        let mut distances: Vec<usize> = Vec::with_capacity(self.seqs.len());
+
+        for seqindex in 2..self.nrows() {
+            // Jaccard distances from seq[seqindex] to all that are already placed.
+            distances.clear();
+            distances.extend(
+                order
+                    .iter()
+                    .map(|i| jaccard_distance(&self.seqs[seqindex], &self.seqs[*i])),
+            );
+
+            // Find minimum distance. First check the "ends", that is, the distance
+            // if the new sequence is placed at top or bottom.
+            let (mut min_dist, mut min_index) =
+                if distances.first().unwrap() < distances.last().unwrap() {
+                    (*distances.first().unwrap(), 0)
+                } else {
+                    (*distances.last().unwrap(), seqindex)
+                };
+
+            // Now check the distances if the new sequence is placed in between two existing.
+            // This adds 2 new neighbor distances, but removes one.
+            for i in 1..order.len() {
+                let new_dist = distances[i - 1] + distances[i] - neighbor_distances[i - 1];
+                if new_dist < min_dist {
+                    min_dist = new_dist;
+                    min_index = i;
+                }
+            }
+
+            order.insert(min_index, seqindex);
+            // If min_index is 0, the new sequence is placed at beginning
+            if min_index == 0 {
+                neighbor_distances.insert(0, min_dist);
+            }
+            // If it's the last, then we just place it at the end
+            else if min_index == seqindex {
+                neighbor_distances.push(min_dist);
+            }
+            // Else, we place it in the middle of two sequences. This removes (overwrites) the
+            // neighbor distance of the two seqs that are now separated, but adds two new
+            // neighbor pairs - for both the new seq's new neighbors.
+            else {
+                neighbor_distances[min_index - 1] = distances[min_index - 1];
+                neighbor_distances.insert(min_index, distances[min_index]);
+            }
+        }
+
+        // reorder internal vectors
+        if let Some(c) = self.consensus.as_deref_mut() {
+            sort_by_indices(c, order.clone())
+        };
+        sort_by_indices(&mut self.seqs, order.clone());
+        sort_by_indices(&mut self.graphemes, order);
+
+        self.ordered = true
+    }
+}
+
+fn jaccard_distance(a: &[u8], b: &[u8]) -> usize {
+    a.iter().zip(b.iter()).map(|(i, j)| (i != j) as usize).sum()
+}
+
+fn sort_by_indices<T>(data: &mut [T], mut indices: Vec<usize>) {
+    for idx in 0..data.len() {
+        if indices[idx] != idx {
+            let mut current_idx = idx;
+            loop {
+                let target_idx = indices[current_idx];
+                indices[current_idx] = current_idx;
+                if indices[target_idx] == target_idx {
+                    break;
+                }
+                data.swap(current_idx, target_idx);
+                current_idx = target_idx;
+            }
+        }
     }
 }
 
@@ -393,6 +484,10 @@ impl View {
         // Do not exceed longest name shown on screen
         namewidth = min(namewidth, self.aln.longest_name as isize);
         self.namewidth = namewidth.try_into().unwrap();
+    }
+
+    pub fn order(&mut self) {
+        self.aln.order()
     }
 
     pub fn nrows(&self) -> usize {

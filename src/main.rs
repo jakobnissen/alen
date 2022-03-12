@@ -98,7 +98,7 @@ fn draw_select_footer<T: Write>(io: &mut TerminalIO<T>, view: &View) -> Result<(
     draw_footer_text(
         io,
         view,
-        "q/Esc: Quit | [^⇧] + ↑/↓: Select | [⇧] + k/j: Move up/down | t/b: To top/bottom",
+        "q/Esc: Quit | [^⇧] + ↑/↓: Select | [⇧] + k/j: Move up/down | t/b: To top/bottom | o: Order",
         Color::Grey,
     )
 }
@@ -930,6 +930,15 @@ fn select_loop<T: Write>(
                     code: KeyCode::Char('c'),
                     modifiers: event::KeyModifiers::CONTROL,
                 } => break,
+
+                KeyEvent {
+                    code: KeyCode::Char('o'),
+                    modifiers: event::KeyModifiers::NONE,
+                } => {
+                    view.order();
+                    draw_sequences(io, view)?;
+                    continue;
+                }
 
                 // Move selection up/down
                 KeyEvent {
