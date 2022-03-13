@@ -202,7 +202,7 @@ fn draw_nonconsensus_names<T: Write>(io: &mut TerminalIO<T>, view: &View) -> Res
     if let Some(range) = view.seq_row_range() {
         for (i, nameindex) in range.into_iter().enumerate() {
             let termrow = (i + HEADER_LINES) as u16;
-            draw_name(io, view.namewidth, &view.graphemes()[nameindex], termrow)?;
+            draw_name(io, view.namewidth, view.grapheme(nameindex).unwrap(), termrow)?;
         }
     }
     Ok(())
@@ -220,7 +220,7 @@ fn draw_consensus_names<T: Write>(io: &mut TerminalIO<T>, view: &View) -> Result
     if let Some(range) = view.seq_row_range() {
         for (i, nameindex) in range.enumerate() {
             let termrow = (i + 1 + HEADER_LINES) as u16;
-            draw_name(io, view.namewidth, &view.graphemes()[nameindex], termrow)?;
+            draw_name(io, view.namewidth, view.grapheme(nameindex).unwrap(), termrow)?;
         }
     }
     Ok(())
@@ -258,7 +258,7 @@ fn highlight_name<T: Write>(io: &mut TerminalIO<T>, view: &mut View, nrow: usize
         header_row,
         0,
         view.namewidth,
-        &view.graphemes()[nrow].string,
+        &view.grapheme(nrow).unwrap().string,
     )
 }
 
@@ -285,7 +285,7 @@ fn draw_nonconsensus_sequences<T: Write>(io: &mut TerminalIO<T>, view: &View) ->
 
     for (i, alnrow) in row_range.enumerate() {
         let termrow = (i + HEADER_LINES) as u16;
-        let seq = &view.seqs()[alnrow][col_range.clone()];
+        let seq = &view.seq(alnrow).unwrap()[col_range.clone()];
         draw_sequence(io, view.namewidth + 1, view.is_aa(), seq, termrow)?;
     }
     Ok(())
@@ -327,7 +327,7 @@ fn draw_consensus_sequences<T: Write>(io: &mut TerminalIO<T>, view: &View) -> Re
     if let Some(alnrows) = view.seq_row_range() {
         for (i, alnrow) in alnrows.enumerate() {
             let termrow = (i + HEADER_LINES + 1) as u16;
-            let seq = &view.seqs()[alnrow][col_range.clone()];
+            let seq = &view.seq(alnrow).unwrap()[col_range.clone()];
             draw_consensus_other_seq(io, view.namewidth + 1, termrow, view.is_aa(), seq, cons_seq)?
         }
     }
@@ -846,7 +846,7 @@ fn search_loop<T: Write>(io: &mut TerminalIO<T>, view: &mut View) -> Result<()> 
                         let seq_col =
                             start.saturating_sub(view.colstart) as u16 + (view.namewidth + 1);
                         let highlight_str = unsafe {
-                            std::str::from_utf8_unchecked(&view.seqs()[row][start..stop])
+                            std::str::from_utf8_unchecked(&view.seq(row).unwrap()[start..stop])
                         };
                         draw_highlight(io, seq_row, seq_col, view.term_ncols, highlight_str)?;
                         select_loop(io, view, row)?;
@@ -881,14 +881,14 @@ fn search_query(view: &View, query: &str) -> SearchResult {
     };
 
     // First search the headers
-    for (n_header, header) in view.graphemes().iter().enumerate() {
+    for (n_header, header) in view.graphemes().enumerate() {
         if re.is_match(&header.string) {
             return SearchResult::MatchHeader(n_header);
         }
     }
 
     // Then search the sequences
-    for (rowno, seq) in view.seqs().iter().enumerate() {
+    for (rowno, seq) in view.seqs().enumerate() {
         // We have checked on instantiation that this is OK, and do not provide
         // any functionality to mutate the sequences
         let string = unsafe { std::str::from_utf8_unchecked(seq) };

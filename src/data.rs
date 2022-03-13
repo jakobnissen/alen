@@ -83,38 +83,37 @@ impl Graphemes {
 }
 
 // Returns whether it's an AA alphabet, else it default to DNA.
-fn verify_alphabet(seqs: &[Vec<u8>], graphemes_vec: &[Graphemes], must_aa: bool) -> Result<bool> {
+fn verify_alphabet(entries: &[Entry], must_aa: bool) -> Result<bool> {
     let dna_alphabet = Alphabet::new(b"-ACMGRSVTUWYHKDBNacmgrsvtuwyhkdbn");
     let aa_alphabet = Alphabet::new(b"*-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz");
 
     let mut valid_dna = !must_aa;
-    for (seq, graphemes) in seqs.iter().zip(graphemes_vec) {
+    for entry in entries.iter(){
         if valid_dna {
-            if dna_alphabet.is_word(seq) {
+            if dna_alphabet.is_word(&entry.seq) {
                 continue;
             } else {
                 valid_dna = false;
             }
         }
-        if !aa_alphabet.is_word(seq) {
+        if !aa_alphabet.is_word(&entry.seq) {
             return Err(anyhow!(
                 "Sequence \"{}\" cannot be understood as amino acids.",
-                graphemes.string
+                entry.graphemes.string
             ));
         }
     }
     Ok(!valid_dna)
 }
 
-fn calculate_consensus(seqs: &[Vec<u8>], is_aa: bool) -> Vec<Option<u8>> {
+fn calculate_consensus<'a, T: Iterator<Item=&'a Vec<u8>>>(seqs: T, ncols: usize, is_aa: bool) -> Vec<Option<u8>> {
     // We have verified seq is *, - or A-Z, a-z. We uppercase, by masking 3rd bit.
     // * and - are 27th and 28th elements, giving us 28 possible elements total
     let offset = b'A';
-    let ncols = seqs[0].len();
     let mut counts = vec![[0u32; 28]; ncols];
 
     // First loop over sequneces in memory order
-    for seq in seqs.iter() {
+    for seq in seqs {
         for (byte, arr) in seq.iter().zip(counts.iter_mut()) {
             let index = match byte {
                 b'*' => 26,
@@ -199,35 +198,39 @@ mod tests {
     }
 }
 
+struct Entry {
+    graphemes: Graphemes,
+    seq: Vec<u8>,
+    original_index: usize
+}
+
 pub struct Alignment {
-    graphemes: Vec<Graphemes>,
+    entries: Vec<Entry>,
     // longest as in number of graphemes. We cache this for efficiency, it can be
     // computed from the graphemes field easily
     longest_name: usize,
-    seqs: Vec<Vec<u8>>,
     // we calculate this lazily upon demand
     consensus: Option<Vec<Option<u8>>>,
-    is_aa: bool,
-    ordered: bool,
+    is_aa: bool
 }
 
 impl Alignment {
     fn nrows(&self) -> usize {
-        self.seqs.len()
+        self.entries.len()
     }
 
     fn ncols(&self) -> usize {
-        self.seqs[0].len()
+        self.entries[0].seq.len()
     }
 
     fn new<T: BufRead>(file: T, uppercase: bool, must_aa: bool) -> Result<Alignment> {
-        let mut seqs = Vec::new();
-        let mut graphemes: Vec<Graphemes> = Vec::new();
         let reader = fasta::Reader::new(file);
         let mut seqlength: Option<usize> = None;
-        for result in reader.records() {
+        let mut entries = Vec::new();
+
+        for (original_index, result) in reader.records().enumerate() {
             let record = result?;
-            let header = Graphemes::new(record.id());
+            let graphemes = Graphemes::new(record.id());
             let seq = record.seq().to_vec();
 
             // Check identical sequence lengths
@@ -237,51 +240,52 @@ impl Alignment {
                         "Not all input sequences are the same length. \
                     Expected sequence length {}, seq \"{}\" has length {}.",
                         len,
-                        &header.string,
+                        &graphemes.string,
                         seq.len()
                     ));
                 }
             } else {
                 seqlength = Some(seq.len())
             }
-            graphemes.push(header);
-            seqs.push(seq);
+            entries.push(Entry{
+                graphemes,
+                seq,
+                original_index
+            })
         }
 
         // Turn uppercase if requested
         if uppercase {
-            seqs.iter_mut().for_each(|s| s.make_ascii_uppercase());
+            entries.iter_mut().for_each(|s| s.seq.make_ascii_uppercase());
         }
 
         // Verify alphabet
-        let is_aa = verify_alphabet(&seqs, &graphemes, must_aa)?;
+        let is_aa = verify_alphabet(&entries, must_aa)?;
 
         if seqlength.map_or(true, |i| i < 1) {
             return Err(anyhow!("Alignment has no seqs, or seqs have length 0."));
         }
 
-        let longest_name = graphemes.iter().map(|v| v.len()).max().unwrap();
+        let longest_name = entries.iter().map(|v| v.graphemes.len()).max().unwrap();
         Ok(Alignment {
-            graphemes,
+            entries,
             longest_name,
-            seqs,
             consensus: None,
             is_aa,
-            ordered: false
         })
     }
 
     /// Reorder the vectors of the alignment such that similar rows are next to each other.
     fn order(&mut self) {
         // If already ordered or 2 or fewer rows, ordering doesn't matter
-        if self.ordered || self.nrows() < 3 {
+        if self.nrows() < 3 {
             return;
         }
 
         // Choices only appear when placing the 3rd seq, so first two are given.
         let mut order: Vec<usize> = vec![0, 1];
-        let mut neighbor_distances = vec![jaccard_distance(&self.seqs[0], &self.seqs[1])];
-        let mut distances: Vec<usize> = Vec::with_capacity(self.seqs.len());
+        let mut neighbor_distances = vec![jaccard_distance(&self.entries[0].seq, &self.entries[1].seq)];
+        let mut distances: Vec<usize> = Vec::with_capacity(self.nrows());
 
         for seqindex in 2..self.nrows() {
             // Jaccard distances from seq[seqindex] to all that are already placed.
@@ -289,7 +293,7 @@ impl Alignment {
             distances.extend(
                 order
                     .iter()
-                    .map(|i| jaccard_distance(&self.seqs[seqindex], &self.seqs[*i])),
+                    .map(|i| jaccard_distance(&self.entries[seqindex].seq, &self.entries[*i].seq)),
             );
 
             // Find minimum distance. First check the "ends", that is, the distance
@@ -333,10 +337,7 @@ impl Alignment {
         if let Some(c) = self.consensus.as_deref_mut() {
             sort_by_indices(c, order.clone())
         };
-        sort_by_indices(&mut self.seqs, order.clone());
-        sort_by_indices(&mut self.graphemes, order);
-
-        self.ordered = true
+        sort_by_indices(&mut self.entries, order);
     }
 }
 
@@ -407,12 +408,20 @@ impl View {
         Ok(View::new(Alignment::new(file, uppercase, must_aa)?))
     }
 
-    pub fn graphemes(&self) -> &Vec<Graphemes> {
-        &self.aln.graphemes
+    pub fn graphemes(&self) -> impl Iterator<Item=& Graphemes> {
+        self.aln.entries.iter().map(|e| &e.graphemes)
     }
 
-    pub fn seqs(&self) -> &Vec<Vec<u8>> {
-        &self.aln.seqs
+    pub fn grapheme(&self, n: usize) -> Option<&Graphemes> {
+        self.aln.entries.get(n).map(|x| &x.graphemes)
+    }
+
+    pub fn seqs(&self) -> impl Iterator<Item=&Vec<u8>> {
+        self.aln.entries.iter().map(|e| &e.seq)
+    }
+
+    pub fn seq(&self, n: usize) -> Option<&Vec<u8>> {
+        self.aln.entries.get(n).map(|x| &x.seq)
     }
 
     pub fn consensus(&self) -> Option<&Vec<Option<u8>>> {
@@ -420,7 +429,8 @@ impl View {
     }
 
     pub fn calculate_consensus(&mut self) {
-        self.aln.consensus = Some(calculate_consensus(&self.aln.seqs, self.is_aa()))
+        let v = Some(calculate_consensus(&mut self.seqs(), self.ncols(), self.is_aa()));
+        self.aln.consensus = v
     }
 
     pub fn is_aa(&self) -> bool {
@@ -462,18 +472,7 @@ impl View {
 
     // Returns None if operation failed, Some(()) otherwise
     pub fn move_row(&mut self, from: usize, to: usize) -> Option<()> {
-        match move_element(&mut self.aln.graphemes, from, to) {
-            Some(_) => {
-                // If the first succeeds, the other MUST also succeed,
-                // else the fields go out of synch and we must panic
-                move_element(&mut self.aln.seqs, from, to).unwrap();
-                if let Some(v) = &mut self.aln.consensus {
-                    move_element(v, from, to).unwrap();
-                }
-                Some(())
-            }
-            None => None,
-        }
+        move_element(&mut self.aln.entries, from, to)
     }
 
     pub fn resize_names(&mut self, delta: isize) {
