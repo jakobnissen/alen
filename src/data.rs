@@ -88,7 +88,7 @@ fn verify_alphabet(entries: &[Entry], must_aa: bool) -> Result<bool> {
     let aa_alphabet = Alphabet::new(b"*-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz");
 
     let mut valid_dna = !must_aa;
-    for entry in entries.iter(){
+    for entry in entries.iter() {
         if valid_dna {
             if dna_alphabet.is_word(&entry.seq) {
                 continue;
@@ -106,7 +106,11 @@ fn verify_alphabet(entries: &[Entry], must_aa: bool) -> Result<bool> {
     Ok(!valid_dna)
 }
 
-fn calculate_consensus<'a, T: Iterator<Item=&'a Vec<u8>>>(seqs: T, ncols: usize, is_aa: bool) -> Vec<Option<u8>> {
+fn calculate_consensus<'a, T: Iterator<Item = &'a Vec<u8>>>(
+    seqs: T,
+    ncols: usize,
+    is_aa: bool,
+) -> Vec<Option<u8>> {
     // We have verified seq is *, - or A-Z, a-z. We uppercase, by masking 3rd bit.
     // * and - are 27th and 28th elements, giving us 28 possible elements total
     let offset = b'A';
@@ -201,7 +205,7 @@ mod tests {
 struct Entry {
     graphemes: Graphemes,
     seq: Vec<u8>,
-    original_index: usize
+    original_index: usize,
 }
 
 pub struct Alignment {
@@ -211,7 +215,10 @@ pub struct Alignment {
     longest_name: usize,
     // we calculate this lazily upon demand
     consensus: Option<Vec<Option<u8>>>,
-    is_aa: bool
+    // When sorting entries by |ent| order[ent.original_index], the rows are ordered.
+    // also calculate this lazily
+    order: Option<Vec<usize>>,
+    is_aa: bool,
 }
 
 impl Alignment {
@@ -247,16 +254,18 @@ impl Alignment {
             } else {
                 seqlength = Some(seq.len())
             }
-            entries.push(Entry{
+            entries.push(Entry {
                 graphemes,
                 seq,
-                original_index
+                original_index,
             })
         }
 
         // Turn uppercase if requested
         if uppercase {
-            entries.iter_mut().for_each(|s| s.seq.make_ascii_uppercase());
+            entries
+                .iter_mut()
+                .for_each(|s| s.seq.make_ascii_uppercase());
         }
 
         // Verify alphabet
@@ -271,20 +280,25 @@ impl Alignment {
             entries,
             longest_name,
             consensus: None,
+            order: None,
             is_aa,
         })
     }
 
     /// Reorder the vectors of the alignment such that similar rows are next to each other.
-    fn order(&mut self) {
+    fn calculate_order(&mut self) -> Vec<usize> {
         // If already ordered or 2 or fewer rows, ordering doesn't matter
         if self.nrows() < 3 {
-            return;
+            return (0..self.nrows()).collect();
         }
 
         // Choices only appear when placing the 3rd seq, so first two are given.
-        let mut order: Vec<usize> = vec![0, 1];
-        let mut neighbor_distances = vec![jaccard_distance(&self.entries[0].seq, &self.entries[1].seq)];
+        let mut order: Vec<usize> = vec![
+            self.entries[0].original_index,
+            self.entries[1].original_index,
+        ];
+        let mut neighbor_distances =
+            vec![jaccard_distance(&self.entries[0].seq, &self.entries[1].seq)];
         let mut distances: Vec<usize> = Vec::with_capacity(self.nrows());
 
         for seqindex in 2..self.nrows() {
@@ -315,7 +329,7 @@ impl Alignment {
                 }
             }
 
-            order.insert(min_index, seqindex);
+            order.insert(min_index, self.entries[seqindex].original_index);
             // If min_index is 0, the new sequence is placed at beginning
             if min_index == 0 {
                 neighbor_distances.insert(0, min_dist);
@@ -333,33 +347,19 @@ impl Alignment {
             }
         }
 
-        // reorder internal vectors
-        if let Some(c) = self.consensus.as_deref_mut() {
-            sort_by_indices(c, order.clone())
-        };
-        sort_by_indices(&mut self.entries, order);
+        // Now transform order such that if the order begins with [8, 3, 0], then the 8th
+        // index is 0, 3th index is 1, 0th index is 2 etc.
+        // That means we can sort the entries by looking up directly in the order
+        let mut ord = vec![0; self.nrows()];
+        for (i, o) in order.iter().enumerate() {
+            ord[*o] = i
+        }
+        ord
     }
 }
 
 fn jaccard_distance(a: &[u8], b: &[u8]) -> usize {
     a.iter().zip(b.iter()).map(|(i, j)| (i != j) as usize).sum()
-}
-
-fn sort_by_indices<T>(data: &mut [T], mut indices: Vec<usize>) {
-    for idx in 0..data.len() {
-        if indices[idx] != idx {
-            let mut current_idx = idx;
-            loop {
-                let target_idx = indices[current_idx];
-                indices[current_idx] = current_idx;
-                if indices[target_idx] == target_idx {
-                    break;
-                }
-                data.swap(current_idx, target_idx);
-                current_idx = target_idx;
-            }
-        }
-    }
 }
 
 fn calculate_start(current: usize, delta: isize, displaysize: usize, n_rows_cols: usize) -> usize {
@@ -408,7 +408,7 @@ impl View {
         Ok(View::new(Alignment::new(file, uppercase, must_aa)?))
     }
 
-    pub fn graphemes(&self) -> impl Iterator<Item=& Graphemes> {
+    pub fn graphemes(&self) -> impl Iterator<Item = &Graphemes> {
         self.aln.entries.iter().map(|e| &e.graphemes)
     }
 
@@ -416,7 +416,7 @@ impl View {
         self.aln.entries.get(n).map(|x| &x.graphemes)
     }
 
-    pub fn seqs(&self) -> impl Iterator<Item=&Vec<u8>> {
+    pub fn seqs(&self) -> impl Iterator<Item = &Vec<u8>> {
         self.aln.entries.iter().map(|e| &e.seq)
     }
 
@@ -429,7 +429,11 @@ impl View {
     }
 
     pub fn calculate_consensus(&mut self) {
-        let v = Some(calculate_consensus(&mut self.seqs(), self.ncols(), self.is_aa()));
+        let v = Some(calculate_consensus(
+            &mut self.seqs(),
+            self.ncols(),
+            self.is_aa(),
+        ));
         self.aln.consensus = v
     }
 
@@ -485,8 +489,21 @@ impl View {
         self.namewidth = namewidth.try_into().unwrap();
     }
 
+    pub fn order_original(&mut self) {
+        self.aln
+            .entries
+            .sort_unstable_by(|a, b| a.original_index.cmp(&b.original_index))
+    }
+
     pub fn order(&mut self) {
-        self.aln.order()
+        if self.aln.order.is_none() {
+            self.aln.order = Some(self.aln.calculate_order())
+        }
+        let order = self.aln.order.as_ref().unwrap();
+        //println!("\n\n\n\n\n\n\n\n\n\n\n\n\n\n{:?}", order);
+        self.aln
+            .entries
+            .sort_unstable_by(|a, b| order[a.original_index].cmp(&order[b.original_index]))
     }
 
     pub fn nrows(&self) -> usize {

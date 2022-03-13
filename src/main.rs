@@ -98,7 +98,7 @@ fn draw_select_footer<T: Write>(io: &mut TerminalIO<T>, view: &View) -> Result<(
     draw_footer_text(
         io,
         view,
-        "q/Esc: Quit | [^⇧] + ↑/↓: Select | [⇧] + k/j: Move up/down | t/b: To top/bottom | o: Order",
+        "q/Esc: Quit | [^⇧] + ↑/↓: Select | [⇧] + k/j: Move up/down | t/b: To top/bottom | o: Order | r: Reorder",
         Color::Grey,
     )
 }
@@ -202,7 +202,12 @@ fn draw_nonconsensus_names<T: Write>(io: &mut TerminalIO<T>, view: &View) -> Res
     if let Some(range) = view.seq_row_range() {
         for (i, nameindex) in range.into_iter().enumerate() {
             let termrow = (i + HEADER_LINES) as u16;
-            draw_name(io, view.namewidth, view.grapheme(nameindex).unwrap(), termrow)?;
+            draw_name(
+                io,
+                view.namewidth,
+                view.grapheme(nameindex).unwrap(),
+                termrow,
+            )?;
         }
     }
     Ok(())
@@ -220,7 +225,12 @@ fn draw_consensus_names<T: Write>(io: &mut TerminalIO<T>, view: &View) -> Result
     if let Some(range) = view.seq_row_range() {
         for (i, nameindex) in range.enumerate() {
             let termrow = (i + 1 + HEADER_LINES) as u16;
-            draw_name(io, view.namewidth, view.grapheme(nameindex).unwrap(), termrow)?;
+            draw_name(
+                io,
+                view.namewidth,
+                view.grapheme(nameindex).unwrap(),
+                termrow,
+            )?;
         }
     }
     Ok(())
@@ -930,12 +940,19 @@ fn select_loop<T: Write>(
                     code: KeyCode::Char('c'),
                     modifiers: event::KeyModifiers::CONTROL,
                 } => break,
-
                 KeyEvent {
                     code: KeyCode::Char('o'),
                     modifiers: event::KeyModifiers::NONE,
                 } => {
                     view.order();
+                    draw_sequences(io, view)?;
+                    continue;
+                }
+                KeyEvent {
+                    code: KeyCode::Char('r'),
+                    modifiers: event::KeyModifiers::NONE,
+                } => {
+                    view.order_original();
                     draw_sequences(io, view)?;
                     continue;
                 }
