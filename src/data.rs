@@ -206,6 +206,9 @@ struct Entry {
     graphemes: Graphemes,
     seq: Vec<u8>,
     original_index: usize,
+    // first_nogap..last_nogap into seq gets non-gapped seq
+    first_nogap: u32,
+    last_nogap: u32,
 }
 
 pub struct Alignment {
@@ -254,10 +257,23 @@ impl Alignment {
             } else {
                 seqlength = Some(seq.len())
             }
+
+            // start..stop is span of non-deleted symbols
+            let (first_nogap, last_nogap) = match seq.iter().position(|&i| i != b'-') {
+                None => (0, 0),
+                Some(u) => {
+                    let last_nogap: u32 =
+                        (seq.len() - seq.iter().rev().position(|&i| i != b'-').unwrap()) as u32;
+                    (u as u32, last_nogap)
+                }
+            };
+
             entries.push(Entry {
                 graphemes,
                 seq,
                 original_index,
+                first_nogap,
+                last_nogap,
             })
         }
 
@@ -297,9 +313,8 @@ impl Alignment {
             self.entries[0].original_index,
             self.entries[1].original_index,
         ];
-        let mut neighbor_distances =
-            vec![jaccard_distance(&self.entries[0].seq, &self.entries[1].seq)];
-        let mut distances: Vec<usize> = Vec::with_capacity(self.nrows());
+        let mut neighbor_distances = vec![jaccard_distance(&self.entries[0], &self.entries[1])];
+        let mut distances: Vec<f32> = Vec::with_capacity(self.nrows());
 
         for seqindex in 2..self.nrows() {
             // Jaccard distances from seq[seqindex] to all that are already placed.
@@ -307,7 +322,7 @@ impl Alignment {
             distances.extend(
                 order
                     .iter()
-                    .map(|i| jaccard_distance(&self.entries[seqindex].seq, &self.entries[*i].seq)),
+                    .map(|i| jaccard_distance(&self.entries[seqindex], &self.entries[*i])),
             );
 
             // Find minimum distance. First check the "ends", that is, the distance
@@ -358,8 +373,18 @@ impl Alignment {
     }
 }
 
-fn jaccard_distance(a: &[u8], b: &[u8]) -> usize {
-    a.iter().zip(b.iter()).map(|(i, j)| (i != j) as usize).sum()
+fn jaccard_distance(a: &Entry, b: &Entry) -> f32 {
+    let start = a.first_nogap.max(b.first_nogap) as usize;
+    let stop = a.last_nogap.min(b.last_nogap) as usize;
+    if stop <= start {
+        return 1.0;
+    }
+    let d: usize = a.seq[start..stop]
+        .iter()
+        .zip(b.seq[start..stop].iter())
+        .map(|(i, j)| (i != j) as usize)
+        .sum();
+    ((d as f64) / (stop - start) as f64) as f32
 }
 
 fn calculate_start(current: usize, delta: isize, displaysize: usize, n_rows_cols: usize) -> usize {
