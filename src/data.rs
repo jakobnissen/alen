@@ -220,7 +220,7 @@ pub struct Alignment {
     consensus: Option<Vec<Option<u8>>>,
     // When sorting entries by |ent| order[ent.original_index], the rows are ordered.
     // also calculate this lazily
-    order: Option<Vec<usize>>,
+    order: Option<Vec<u32>>,
     is_aa: bool,
 }
 
@@ -302,10 +302,10 @@ impl Alignment {
     }
 
     /// Reorder the vectors of the alignment such that similar rows are next to each other.
-    fn calculate_order(&mut self) -> Vec<usize> {
+    fn calculate_order(&mut self) -> Vec<u32> {
         // If already ordered or 2 or fewer rows, ordering doesn't matter
         if self.nrows() < 3 {
-            return (0..self.nrows()).collect();
+            return (0..(self.nrows().try_into().unwrap())).collect();
         }
 
         // Choices only appear when placing the 3rd seq, so first two are given.
@@ -365,9 +365,9 @@ impl Alignment {
         // Now transform order such that if the order begins with [8, 3, 0], then the 8th
         // index is 0, 3th index is 1, 0th index is 2 etc.
         // That means we can sort the entries by looking up directly in the order
-        let mut ord = vec![0; self.nrows()];
+        let mut ord: Vec<u32> = vec![0; self.nrows().try_into().unwrap()];
         for (i, o) in order.iter().enumerate() {
-            ord[*o] = i
+            ord[*o] = i.try_into().unwrap()
         }
         ord
     }
@@ -525,7 +525,6 @@ impl View {
             self.aln.order = Some(self.aln.calculate_order())
         }
         let order = self.aln.order.as_ref().unwrap();
-        //println!("\n\n\n\n\n\n\n\n\n\n\n\n\n\n{:?}", order);
         self.aln
             .entries
             .sort_unstable_by(|a, b| order[a.original_index].cmp(&order[b.original_index]))

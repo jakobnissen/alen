@@ -101,7 +101,7 @@ fn draw_select_footer<T: Write>(io: &mut TerminalIO<T>, view: &View) -> Result<(
     draw_footer_text(
         io,
         view,
-        "q/Esc: Quit | [^⇧] + ↑/↓: Select | [⇧] + k/j: Move up/down | t/b: To top/bottom | o: Order | r: Reorder",
+        "q/Esc: Quit | [^⇧] + ↑/↓: Select | [⇧] + k/j: Move up/down | t/b: To top/bottom | o: Order | r: Reset order",
         Color::Grey,
     )
 }
