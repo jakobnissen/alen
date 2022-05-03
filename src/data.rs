@@ -167,7 +167,7 @@ fn calculate_consensus<'a, T: Iterator<Item = &'a Vec<u8>>>(
         .collect();
 }
 
-fn move_element<T>(v: &mut Vec<T>, from: usize, to: usize) -> Option<()> {
+fn move_element<T>(v: &mut [T], from: usize, to: usize) -> Option<()> {
     if from.max(to) >= v.len() {
         return None;
     }
@@ -365,7 +365,7 @@ impl Alignment {
         // Now transform order such that if the order begins with [8, 3, 0], then the 8th
         // index is 0, 3th index is 1, 0th index is 2 etc.
         // That means we can sort the entries by looking up directly in the order
-        let mut ord: Vec<u32> = vec![0; self.nrows().try_into().unwrap()];
+        let mut ord: Vec<u32> = vec![0; self.nrows()];
         for (i, o) in order.iter().enumerate() {
             ord[*o] = i.try_into().unwrap()
         }

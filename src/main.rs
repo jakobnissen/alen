@@ -3,7 +3,6 @@
 // To do: Implement multithreading. One thread reads input and moves view etc,
 // another draws. Drawings can be "skipped" if there are still queued inputs, perhaps?
 
-// The 'order' field could be u32
 // Optimize ordering, or allow to exit. It can be quite slow, I think.
 
 mod constants;
