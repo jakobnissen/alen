@@ -309,7 +309,7 @@ impl Alignment {
         // If already ordered or 2 or fewer rows, ordering doesn't matter
         if self.nrows() < 3 {
             self.order = Some((0..(self.nrows().try_into().unwrap())).collect());
-            return
+            return;
         }
 
         // Choices only appear when placing the 3rd seq, so first two are given.

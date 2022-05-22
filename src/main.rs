@@ -744,6 +744,11 @@ fn jumpcol_loop<T: Write>(io: &mut TerminalIO<T>, view: &mut View) -> Result<()>
                     code: KeyCode::Char('c'),
                     modifiers: event::KeyModifiers::CONTROL,
                 })
+            || event
+                == Event::Key(KeyEvent {
+                    code: KeyCode::Char('q'),
+                    modifiers: event::KeyModifiers::NONE,
+                })
         {
             break;
         };
