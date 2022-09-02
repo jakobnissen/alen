@@ -239,6 +239,9 @@ impl Alignment {
         let mut entries = Vec::new();
 
         for (original_index, result) in reader.records().enumerate() {
+            // Turn uppercase
+            // Check alphabet
+            // Chech sequence length
             let record = result?;
             let graphemes = Graphemes::new(record.id());
             let seq = record.seq().to_vec();
