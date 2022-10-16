@@ -122,6 +122,7 @@ fn calculate_consensus<'a, T: Iterator<Item = &'a Vec<u8>>>(
             let index = match byte {
                 b'*' => 26,
                 b'-' => 27,
+                b'.' => 27,
                 // Unset third bit to uppercase ASCII letters
                 b => ((b & 0b11011111) - offset) as usize,
             };
