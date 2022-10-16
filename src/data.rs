@@ -84,8 +84,8 @@ impl Graphemes {
 
 // Returns whether it's an AA alphabet, else it default to DNA.
 fn verify_alphabet(entries: &[Entry], must_aa: bool) -> Result<bool> {
-    let dna_alphabet = Alphabet::new(b"-ACMGRSVTUWYHKDBNacmgrsvtuwyhkdbn");
-    let aa_alphabet = Alphabet::new(b"*-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz");
+    let dna_alphabet = Alphabet::new(b".-ACMGRSVTUWYHKDBNacmgrsvtuwyhkdbn");
+    let aa_alphabet = Alphabet::new(b".*-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz");
 
     let mut valid_dna = !must_aa;
     for entry in entries.iter() {
