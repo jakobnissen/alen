@@ -11,7 +11,6 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use crossterm::terminal;
 
-use bio::alphabets::Alphabet;
 use bio::io::fasta;
 /// A string that is separated into its constituent graphemes, used for printing
 /// with uniform width.
@@ -82,28 +81,32 @@ impl Graphemes {
     }
 }
 
+// Bitmap of ASCII values 1 << (x - b'E')
+// since first letter only in AA alphabet is E.
+// Asterisk (*) is also AA only, but we check that separately
+const ONLY_AA: u64 = 0x00281cb300281cb3;
+const ONLY_AA_OFFSET: u8 = b'E';
+
 // Returns whether it's an AA alphabet, else it default to DNA.
 fn verify_alphabet(entries: &[Entry], must_aa: bool) -> Result<bool> {
-    let dna_alphabet = Alphabet::new(b"-ACMGRSVTUWYHKDBNacmgrsvtuwyhkdbn");
-    let aa_alphabet = Alphabet::new(b"*-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz");
-
-    let mut valid_dna = !must_aa;
+    let mut must_be_aa = must_aa;
     for entry in entries.iter() {
-        if valid_dna {
-            if dna_alphabet.is_word(&entry.seq) {
-                continue;
-            } else {
-                valid_dna = false;
+        for &byte in entry.seq.iter() {
+            // Printable ASCII range: ! to ~
+            if !(33..=126).contains(&byte) {
+                return Err(anyhow!(
+                    "Sequence named \"{}\" contains non-ASCII-printable byte 0x{:x}",
+                    entry.graphemes.string,
+                    byte
+                ));
             }
-        }
-        if !aa_alphabet.is_word(&entry.seq) {
-            return Err(anyhow!(
-                "Sequence \"{}\" cannot be understood as amino acids.",
-                entry.graphemes.string
-            ));
+            // It's asterisk, or else it's both at least ONLY_AA_OFFSET (meaning)
+            // at least the value of the first only-AA character, and also found in the ONLY_AA bitmap.
+            must_be_aa |= (byte == b'*')
+                | ((byte >= ONLY_AA_OFFSET) & ((ONLY_AA >> (byte - ONLY_AA_OFFSET) & 1) == 1));
         }
     }
-    Ok(!valid_dna)
+    Ok(must_be_aa)
 }
 
 fn calculate_consensus<'a, T: Iterator<Item = &'a Vec<u8>>>(
@@ -111,21 +114,14 @@ fn calculate_consensus<'a, T: Iterator<Item = &'a Vec<u8>>>(
     ncols: usize,
     is_aa: bool,
 ) -> Vec<Option<u8>> {
-    // We have verified seq is *, - or A-Z, a-z. We uppercase, by masking 3rd bit.
-    // * and - are 27th and 28th elements, giving us 28 possible elements total
-    let offset = b'A';
-    let mut counts = vec![[0u32; 28]; ncols];
+    // We have verified seq is between ASCII 33 and 126, inclusive.
+    let offset = b'!';
+    let mut counts = vec![[0u32; 126 - 33 + 1]; ncols];
 
-    // First loop over sequneces in memory order
+    // First loop over sequences in memory order
     for seq in seqs {
         for (byte, arr) in seq.iter().zip(counts.iter_mut()) {
-            let index = match byte {
-                b'*' => 26,
-                b'-' => 27,
-                // Unset third bit to uppercase ASCII letters
-                b => ((b & 0b11011111) - offset) as usize,
-            };
-            arr[index] += 1
+            arr[(byte - offset) as usize] += 1
         }
     }
 
@@ -141,22 +137,23 @@ fn calculate_consensus<'a, T: Iterator<Item = &'a Vec<u8>>>(
         }
     }
 
+    // Uppercase all characters
+    for arr in counts.iter_mut() {
+        for i in b'a'..=b'z' {
+            arr[(i - offset - 32) as usize] += arr[(i - offset) as usize];
+            arr[(i - offset) as usize] = 0
+        }
+    }
+
     return counts
         .iter()
         .map(|arr| {
-            let (mut most_common_byte, count) = arr
+            let (most_common_byte, count) = arr
                 .iter()
                 .enumerate()
                 .max_by_key(|(_, &x)| x)
                 .map(|(i, cnt)| (i as u8 + offset, cnt))
                 .unwrap();
-
-            // If the most common is * or -, it becomes \n and \r after unsetting the bit.
-            most_common_byte = match most_common_byte {
-                b'[' => b'*',
-                b'\\' => b'-',
-                _ => most_common_byte,
-            };
 
             if *count == 0 {
                 None
