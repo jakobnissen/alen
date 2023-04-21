@@ -125,23 +125,23 @@ fn calculate_consensus<'a, T: Iterator<Item = &'a Vec<u8>>>(
         }
     }
 
-    // We set all ambiguous bases/AAs to 0.
-    // These are useless in the consensus
     for arr in counts.iter_mut() {
-        for &i in if is_aa {
-            b"BJOUXZZZZZZ"
-        } else {
-            b"MRSVWYHKDBN"
-        } {
-            arr[(i - offset) as usize] = 0;
-        }
-    }
-
-    // Uppercase all characters
-    for arr in counts.iter_mut() {
+        // Uppercase all characters
         for i in b'a'..=b'z' {
             arr[(i - offset - 32) as usize] += arr[(i - offset) as usize];
             arr[(i - offset) as usize] = 0
+        }
+
+        // We set all ambiguous bases/AAs to 0.
+        // These are useless in the consensus
+        if is_aa {
+            for &i in b"BJOUXZ" {
+                arr[(i - offset) as usize] = 0;
+            }
+        } else {
+            for &i in b"MRSVWYHKDBN" {
+                arr[(i - offset) as usize] = 0;
+            }
         }
     }
 
