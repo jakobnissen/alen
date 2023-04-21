@@ -499,18 +499,8 @@ impl View {
     }
 
     pub fn move_view(&mut self, dy: isize, dx: isize) {
-        self.rowstart = calculate_start(
-            self.rowstart,
-            dy,
-            self.seq_nrows_display() as usize,
-            self.nrows(),
-        );
-        self.colstart = calculate_start(
-            self.colstart,
-            dx,
-            self.seq_ncols_display() as usize,
-            self.ncols(),
-        );
+        self.rowstart = calculate_start(self.rowstart, dy, self.seq_nrows_display(), self.nrows());
+        self.colstart = calculate_start(self.colstart, dx, self.seq_ncols_display(), self.ncols());
     }
 
     // Returns None if operation failed, Some(()) otherwise

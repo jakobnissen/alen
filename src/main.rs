@@ -82,7 +82,7 @@ fn draw_footer_text<T: Write>(
 
     Ok(queue!(
         io.io,
-        cursor::MoveTo(0, (view.term_nrows - 1) as u16),
+        cursor::MoveTo(0, view.term_nrows - 1),
         Print(footer),
     )?)
 }
