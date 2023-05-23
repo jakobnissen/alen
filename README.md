@@ -9,7 +9,7 @@ Simple terminal sequence alignment viewer.
 ![Screenshot](/screenshots/prot.png?raw=true "Screenshot")
 
 ### What is Alen?
-It's a command-like program to view DNA or protein alignments in FASTA formats. Alen is meant for having a quick view of an alignment without having to leave the shell. It's not an alignment editor.
+It's a command-line program to view DNA or protein alignments in FASTA formats. Alen is meant for having a quick view of an alignment without having to leave the shell. It's not an alignment editor.
 
 ### How to install and run.
 Alen _should_ work on most Unix systems, and Windows 10. If someone asks me to, I might add Windows 7 and 8 support.

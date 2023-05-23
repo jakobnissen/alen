@@ -5,17 +5,17 @@ authors = ["Jakob Nybo Nissen <jakobnybonissen@gmail.com>"]
 edition = "2018"
 license = "MIT"
 readme = "README.md"
-description = "A command-like program to view DNA or protein alignments in FASTA formats."
+description = "A command-line program to view DNA, RNA or protein alignments in FASTA format."
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-anyhow = "1.0.63"
-bio = "0.41.0"
-clap = {version = "3.2.20", features = ["derive", "std"], default-features=false}
-crossterm = "0.24.0"
-regex = "1.6.0"
-unicode-segmentation = "1.9.0"
+anyhow = "1.0.71"
+bio = "1.1.0"
+clap = {version = "4.3.0", features = ["derive", "std"], default-features=false}
+crossterm = "0.26.1"
+regex = "1.8.2"
+unicode-segmentation = "1.10.1"
 
 [profile.release]
 strip = true

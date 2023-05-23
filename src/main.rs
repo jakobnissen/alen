@@ -521,10 +521,10 @@ fn default_loop<T: Write>(io: &mut TerminalIO<T>, view: &mut View) -> Result<()>
             || event == Event::Key(KeyCode::Char('q').into())
             || event == Event::Key(KeyCode::Char('Q').into())
             || event
-                == Event::Key(KeyEvent {
-                    code: KeyCode::Char('c'),
-                    modifiers: event::KeyModifiers::CONTROL,
-                })
+                == Event::Key(KeyEvent::new(
+                    KeyCode::Char('c'),
+                    event::KeyModifiers::CONTROL,
+                ))
         {
             break;
         }
@@ -536,54 +536,66 @@ fn default_loop<T: Write>(io: &mut TerminalIO<T>, view: &mut View) -> Result<()>
                     KeyEvent {
                         code: KeyCode::Left,
                         modifiers: event::KeyModifiers::NONE,
+                        ..
                     } => Some((0, -1)),
                     KeyEvent {
                         code: KeyCode::Right,
                         modifiers: event::KeyModifiers::NONE,
+                        ..
                     } => Some((0, 1)),
                     KeyEvent {
                         code: KeyCode::Down,
                         modifiers: event::KeyModifiers::NONE,
+                        ..
                     } => Some((1, 0)),
                     KeyEvent {
                         code: KeyCode::Up,
                         modifiers: event::KeyModifiers::NONE,
+                        ..
                     } => Some((-1, 0)),
 
                     // SHIFT: Move by 10
                     KeyEvent {
                         code: KeyCode::Left,
                         modifiers: event::KeyModifiers::SHIFT,
+                        ..
                     } => Some((0, -10)),
                     KeyEvent {
                         code: KeyCode::Right,
                         modifiers: event::KeyModifiers::SHIFT,
+                        ..
                     } => Some((0, 10)),
                     KeyEvent {
                         code: KeyCode::Down,
                         modifiers: event::KeyModifiers::SHIFT,
+                        ..
                     } => Some((10, 0)),
                     KeyEvent {
                         code: KeyCode::Up,
                         modifiers: event::KeyModifiers::SHIFT,
+                        ..
                     } => Some((-10, 0)),
 
                     // CONTROL: Move to end
                     KeyEvent {
                         code: KeyCode::Left,
                         modifiers: event::KeyModifiers::CONTROL,
+                        ..
                     } => Some((0, isize::MIN)),
                     KeyEvent {
                         code: KeyCode::Right,
                         modifiers: event::KeyModifiers::CONTROL,
+                        ..
                     } => Some((0, isize::MAX)),
                     KeyEvent {
                         code: KeyCode::Down,
                         modifiers: event::KeyModifiers::CONTROL,
+                        ..
                     } => Some((isize::MAX, 0)),
                     KeyEvent {
                         code: KeyCode::Up,
                         modifiers: event::KeyModifiers::CONTROL,
+                        ..
                     } => Some((isize::MIN, 0)),
                     _ => None,
                 };
@@ -594,11 +606,11 @@ fn default_loop<T: Write>(io: &mut TerminalIO<T>, view: &mut View) -> Result<()>
                 let name_move = match kevent {
                     KeyEvent {
                         code: KeyCode::Char(','),
-                        modifiers: event::KeyModifiers::NONE,
+                        ..
                     } => Some(-1),
                     KeyEvent {
                         code: KeyCode::Char('.'),
-                        modifiers: event::KeyModifiers::NONE,
+                        ..
                     } => Some(1),
                     _ => None,
                 };
@@ -613,16 +625,8 @@ fn default_loop<T: Write>(io: &mut TerminalIO<T>, view: &mut View) -> Result<()>
                     }
                 }
 
-                if kevent
-                    == (KeyEvent {
-                        code: KeyCode::Char('f'),
-                        modifiers: event::KeyModifiers::CONTROL,
-                    })
-                    || kevent
-                        == (KeyEvent {
-                            code: KeyCode::Char('F'),
-                            modifiers: event::KeyModifiers::CONTROL,
-                        })
+                if kevent == KeyEvent::new(KeyCode::Char('f'), event::KeyModifiers::CONTROL)
+                    || kevent == KeyEvent::new(KeyCode::Char('F'), event::KeyModifiers::CONTROL)
                 {
                     search_loop(io, view)?;
                     // Return from search mode
@@ -630,16 +634,8 @@ fn default_loop<T: Write>(io: &mut TerminalIO<T>, view: &mut View) -> Result<()>
                     continue;
                 };
 
-                if kevent
-                    == (KeyEvent {
-                        code: KeyCode::Char('s'),
-                        modifiers: event::KeyModifiers::CONTROL,
-                    })
-                    || kevent
-                        == (KeyEvent {
-                            code: KeyCode::Char('S'),
-                            modifiers: event::KeyModifiers::CONTROL,
-                        })
+                if kevent == KeyEvent::new(KeyCode::Char('s'), event::KeyModifiers::CONTROL)
+                    || kevent == KeyEvent::new(KeyCode::Char('S'), event::KeyModifiers::CONTROL)
                 {
                     // We can't enter select mode if there are not enough screen space to
                     // show any rows.
@@ -651,16 +647,8 @@ fn default_loop<T: Write>(io: &mut TerminalIO<T>, view: &mut View) -> Result<()>
                     continue;
                 };
 
-                if kevent
-                    == (KeyEvent {
-                        code: KeyCode::Char('j'),
-                        modifiers: event::KeyModifiers::CONTROL,
-                    })
-                    || kevent
-                        == (KeyEvent {
-                            code: KeyCode::Char('J'),
-                            modifiers: event::KeyModifiers::CONTROL,
-                        })
+                if kevent == KeyEvent::new(KeyCode::Char('j'), event::KeyModifiers::CONTROL)
+                    || kevent == KeyEvent::new(KeyCode::Char('J'), event::KeyModifiers::CONTROL)
                 {
                     jumpcol_loop(io, view)?;
 
@@ -671,32 +659,16 @@ fn default_loop<T: Write>(io: &mut TerminalIO<T>, view: &mut View) -> Result<()>
                 };
 
                 // Redraw
-                if kevent
-                    == (KeyEvent {
-                        code: KeyCode::Char('r'),
-                        modifiers: event::KeyModifiers::NONE,
-                    })
-                    || kevent
-                        == (KeyEvent {
-                            code: KeyCode::Char('R'),
-                            modifiers: event::KeyModifiers::NONE,
-                        })
+                if kevent == KeyEvent::new(KeyCode::Char('r'), event::KeyModifiers::NONE)
+                    || kevent == KeyEvent::new(KeyCode::Char('R'), event::KeyModifiers::NONE)
                 {
                     draw_default_mode_screen(io, view)?;
                     continue;
                 };
 
                 // Shift to/from consensus view
-                if kevent
-                    == (KeyEvent {
-                        code: KeyCode::Char('c'),
-                        modifiers: event::KeyModifiers::NONE,
-                    })
-                    || kevent
-                        == (KeyEvent {
-                            code: KeyCode::Char('C'),
-                            modifiers: event::KeyModifiers::NONE,
-                        })
+                if kevent == KeyEvent::new(KeyCode::Char('c'), event::KeyModifiers::NONE)
+                    || kevent == KeyEvent::new(KeyCode::Char('C'), event::KeyModifiers::NONE)
                 {
                     if view.consensus().is_none() {
                         execute!(
@@ -740,15 +712,11 @@ fn jumpcol_loop<T: Write>(io: &mut TerminalIO<T>, view: &mut View) -> Result<()>
 
         if event == Event::Key(KeyCode::Esc.into())
             || event
-                == Event::Key(KeyEvent {
-                    code: KeyCode::Char('c'),
-                    modifiers: event::KeyModifiers::CONTROL,
-                })
-            || event
-                == Event::Key(KeyEvent {
-                    code: KeyCode::Char('q'),
-                    modifiers: event::KeyModifiers::NONE,
-                })
+                == Event::Key(KeyEvent::new(
+                    KeyCode::Char('c'),
+                    event::KeyModifiers::CONTROL,
+                ))
+            || event == Event::Key(KeyEvent::new(KeyCode::Char('q'), event::KeyModifiers::NONE))
         {
             break;
         };
@@ -756,7 +724,7 @@ fn jumpcol_loop<T: Write>(io: &mut TerminalIO<T>, view: &mut View) -> Result<()>
         match event {
             Event::Key(KeyEvent {
                 code: KeyCode::Char(c),
-                modifiers: _,
+                ..
             }) => {
                 if let '0'..='9' = c {
                     query.push(c)
@@ -764,13 +732,13 @@ fn jumpcol_loop<T: Write>(io: &mut TerminalIO<T>, view: &mut View) -> Result<()>
             }
             Event::Key(KeyEvent {
                 code: KeyCode::Backspace,
-                modifiers: _,
+                ..
             }) => {
                 query.pop();
             }
             Event::Key(KeyEvent {
                 code: KeyCode::Enter,
-                modifiers: _,
+                ..
             }) => {
                 match query.parse::<usize>() {
                     Ok(n) => {
@@ -812,10 +780,10 @@ fn search_loop<T: Write>(io: &mut TerminalIO<T>, view: &mut View) -> Result<()> 
         // Quit on escape or Ctrl-C
         if event == Event::Key(KeyCode::Esc.into())
             || event
-                == Event::Key(KeyEvent {
-                    code: KeyCode::Char('c'),
-                    modifiers: event::KeyModifiers::CONTROL,
-                })
+                == Event::Key(KeyEvent::new(
+                    KeyCode::Char('c'),
+                    event::KeyModifiers::CONTROL,
+                ))
         {
             break;
         };
@@ -823,19 +791,19 @@ fn search_loop<T: Write>(io: &mut TerminalIO<T>, view: &mut View) -> Result<()> 
         match event {
             Event::Key(KeyEvent {
                 code: KeyCode::Char(c),
-                modifiers: _,
+                ..
             }) => {
                 query.push(c);
             }
             Event::Key(KeyEvent {
                 code: KeyCode::Backspace,
-                modifiers: _,
+                ..
             }) => {
                 query.pop();
             }
             Event::Key(KeyEvent {
                 code: KeyCode::Enter,
-                modifiers: _,
+                ..
             }) => {
                 let search_result = search_query(view, &query);
                 match search_result {
@@ -938,18 +906,22 @@ fn select_loop<T: Write>(
                 KeyEvent {
                     code: KeyCode::Esc,
                     modifiers: event::KeyModifiers::NONE,
+                    ..
                 }
                 | KeyEvent {
                     code: KeyCode::Char('q'),
                     modifiers: event::KeyModifiers::NONE,
+                    ..
                 }
                 | KeyEvent {
                     code: KeyCode::Char('c'),
                     modifiers: event::KeyModifiers::CONTROL,
+                    ..
                 } => break,
                 KeyEvent {
                     code: KeyCode::Char('o'),
                     modifiers: event::KeyModifiers::NONE,
+                    ..
                 } => {
                     view.order();
                     draw_sequences(io, view)?;
@@ -958,6 +930,7 @@ fn select_loop<T: Write>(
                 KeyEvent {
                     code: KeyCode::Char('r'),
                     modifiers: event::KeyModifiers::NONE,
+                    ..
                 } => {
                     view.order_original();
                     draw_sequences(io, view)?;
@@ -968,26 +941,32 @@ fn select_loop<T: Write>(
                 KeyEvent {
                     code: KeyCode::Up,
                     modifiers: event::KeyModifiers::NONE,
+                    ..
                 } => Some(-1),
                 KeyEvent {
                     code: KeyCode::Down,
                     modifiers: event::KeyModifiers::NONE,
+                    ..
                 } => Some(1),
                 KeyEvent {
                     code: KeyCode::Up,
                     modifiers: event::KeyModifiers::SHIFT,
+                    ..
                 } => Some(-10),
                 KeyEvent {
                     code: KeyCode::Down,
                     modifiers: event::KeyModifiers::SHIFT,
+                    ..
                 } => Some(10),
                 KeyEvent {
                     code: KeyCode::Up,
                     modifiers: event::KeyModifiers::CONTROL,
+                    ..
                 } => Some(isize::MIN),
                 KeyEvent {
                     code: KeyCode::Down,
                     modifiers: event::KeyModifiers::CONTROL,
+                    ..
                 } => Some(isize::MAX),
 
                 _ => None,
@@ -1002,26 +981,32 @@ fn select_loop<T: Write>(
                 KeyEvent {
                     code: KeyCode::Char('j'),
                     modifiers: event::KeyModifiers::NONE,
+                    ..
                 } => 1,
                 KeyEvent {
                     code: KeyCode::Char('k'),
                     modifiers: event::KeyModifiers::NONE,
+                    ..
                 } => -1,
                 KeyEvent {
                     code: KeyCode::Char('J'),
                     modifiers: event::KeyModifiers::SHIFT,
+                    ..
                 } => 10,
                 KeyEvent {
                     code: KeyCode::Char('K'),
                     modifiers: event::KeyModifiers::SHIFT,
+                    ..
                 } => -10,
                 KeyEvent {
                     code: KeyCode::Char('t'),
                     modifiers: event::KeyModifiers::NONE,
+                    ..
                 } => isize::MIN,
                 KeyEvent {
                     code: KeyCode::Char('b'),
                     modifiers: event::KeyModifiers::NONE,
+                    ..
                 } => isize::MAX,
                 _ => 0,
             };
