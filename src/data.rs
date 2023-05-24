@@ -103,7 +103,8 @@ fn verify_alphabet(entries: &[Entry], must_aa: bool) -> Result<bool> {
             // It's asterisk, or else it's both at least ONLY_AA_OFFSET (meaning)
             // at least the value of the first only-AA character, and also found in the ONLY_AA bitmap.
             must_be_aa |= (byte == b'*')
-                | ((byte >= ONLY_AA_OFFSET) & ((ONLY_AA >> (byte - ONLY_AA_OFFSET) & 1) == 1));
+                | ((ONLY_AA_OFFSET..=b'z').contains(&byte) &
+                    & ((ONLY_AA.wrapping_shr(byte.wrapping_sub(ONLY_AA_OFFSET).into()) & 1) == 1));
         }
     }
     Ok(must_be_aa)
