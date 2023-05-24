@@ -1065,21 +1065,21 @@ fn draw_default_mode_screen<T: Write>(io: &mut TerminalIO<T>, view: &View) -> Re
 }
 
 #[derive(Parser)]
-#[clap(version, author, about)]
+#[command(version, author, about)]
 struct AlenOptions {
     /// Path to alignment
     alignment: OsString,
 
     /// Display sequences in uppercase
-    #[clap(short)]
+    #[arg(short)]
     uppercase: bool,
 
     /// Force parsing as amino acids
-    #[clap(short)]
+    #[arg(short)]
     aminoacids: bool,
 
     /// Disable colors (monochrome, may improve lag)
-    #[clap(short)]
+    #[arg(short)]
     monochrome: bool,
 }
 
