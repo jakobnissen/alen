@@ -10,9 +10,19 @@ It's a command-line program to view DNA or protein alignments in FASTA formats. 
 ### How to install and run.
 Alen _should_ work on most Unix systems, and Windows 10. If someone asks me to, I might add Windows 7 and 8 support.
 
-The easiest way to get it is to download the latest release from the [releases page](https://github.com/jakobnissen/alen/releases) (binaries are not yet available for Windows).
+To get started with Alen, you can install a pre-compiled binary via Conda or download one from the GitHub releases page.
 
-Alternatively, you can download the source code from this repo and compile it yourself using `cargo build --release`.
+To install Alen using Conda:
+```
+$ conda install -c bioconda alen
+```
+
+Visit the GitHub [releases page](https://github.com/jakobnissen/alen/releases) to download the binary (binaries are not yet available for Windows).
+
+Alternatively, you can download the source code from this repo and compile it yourself using Cargo:
+```
+$ cargo build --release
+```
 
 ### How to use
 Simple usage:
