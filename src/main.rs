@@ -14,6 +14,7 @@ use data::{Graphemes, View};
 use std::cmp::min;
 use std::ffi::OsString;
 use std::io::{stdout, BufReader, Write};
+use std::num::NonZeroU8;
 use std::path::Path;
 
 use anyhow::Result;
@@ -350,17 +351,17 @@ fn draw_top_consensus<T: Write>(
     io: &mut TerminalIO<T>,
     colstart: u16,
     is_aa: bool,
-    seq: &[Option<u8>],
+    seq: &[Option<NonZeroU8>],
 ) -> Result<()> {
     queue!(io.io, cursor::MoveTo(colstart, HEADER_LINES as u16),)?;
     for maybe_base in seq {
         let (background_color, symbol) = if let Some(byte) = maybe_base {
             let bc = if is_aa {
-                get_color_background_aa(*byte)
+                get_color_background_aa(byte.get())
             } else {
-                get_color_background_dna(*byte)
+                get_color_background_dna(byte.get())
             };
-            (bc, *byte as char)
+            (bc, byte.get() as char)
         } else {
             (None, ' ')
         };
@@ -376,21 +377,22 @@ fn draw_consensus_other_seq<T: Write>(
     termrow: u16,
     is_aa: bool,
     seq: &[u8],
-    cons: &[Option<u8>],
+    cons: &[Option<NonZeroU8>],
 ) -> Result<()> {
     queue!(io.io, cursor::MoveTo(colstart, termrow))?;
     for (byte, maybe_cons) in seq.iter().zip(cons.iter()) {
-        let (color, symbol) =
-            if maybe_cons.is_some() && maybe_cons.unwrap() & 0b11011111 == byte & 0b11011111 {
-                (None, ' ')
+        let (color, symbol) = if maybe_cons.is_some()
+            && maybe_cons.unwrap().get() & 0b11011111 == byte & 0b11011111
+        {
+            (None, ' ')
+        } else {
+            let color = if is_aa {
+                get_color_background_aa(*byte)
             } else {
-                let color = if is_aa {
-                    get_color_background_aa(*byte)
-                } else {
-                    get_color_background_dna(*byte)
-                };
-                (color, *byte as char)
+                get_color_background_dna(*byte)
             };
+            (color, *byte as char)
+        };
         set_terminal_color(io, color)?;
         queue!(io.io, Print(symbol))?;
     }

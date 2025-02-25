@@ -3,6 +3,7 @@ use crate::constants::{FOOTER_LINES, HEADER_LINES};
 use std::cmp::{max, min};
 use std::convert::TryInto;
 use std::io::BufRead;
+use std::num::{NonZeroU8, NonZeroUsize};
 use std::ops::RangeInclusive;
 
 use anyhow::{anyhow, Result};
@@ -103,7 +104,7 @@ fn verify_alphabet(entries: &[Entry], must_aa: bool) -> Result<bool> {
             // It's asterisk, or else it's both at least ONLY_AA_OFFSET (meaning)
             // at least the value of the first only-AA character, and also found in the ONLY_AA bitmap.
             must_be_aa |= (byte == b'*')
-                | ((ONLY_AA_OFFSET..=b'z').contains(&byte) &
+                | ((ONLY_AA_OFFSET..=b'z').contains(&byte)
                     & ((ONLY_AA.wrapping_shr(byte.wrapping_sub(ONLY_AA_OFFSET).into()) & 1) == 1));
         }
     }
@@ -114,9 +115,10 @@ fn calculate_consensus<'a, T: Iterator<Item = &'a Vec<u8>>>(
     seqs: T,
     ncols: usize,
     is_aa: bool,
-) -> Vec<Option<u8>> {
+) -> Vec<Option<NonZeroU8>> {
     // We have verified seq is between ASCII 33 and 126, inclusive.
     let offset = b'!';
+    let nonzero_offset = NonZeroU8::new(offset).unwrap();
     let mut counts = vec![[0u32; 126 - 33 + 1]; ncols];
 
     // First loop over sequences in memory order
@@ -149,17 +151,12 @@ fn calculate_consensus<'a, T: Iterator<Item = &'a Vec<u8>>>(
     counts
         .iter()
         .map(|arr| {
-            let (most_common_byte, count) = arr
-                .iter()
-                .enumerate()
-                .max_by_key(|(_, &x)| x)
-                .map(|(i, cnt)| (i as u8 + offset, cnt))
-                .unwrap();
+            let (index, count) = arr.iter().enumerate().max_by_key(|(_, &x)| x).unwrap();
 
             if *count == 0 {
                 None
             } else {
-                Some(most_common_byte)
+                Some(nonzero_offset.saturating_add(index as u8))
             }
         })
         .collect()
@@ -215,7 +212,7 @@ pub struct Alignment {
     // computed from the graphemes field easily
     longest_name: usize,
     // we calculate this lazily upon demand
-    consensus: Option<Vec<Option<u8>>>,
+    consensus: Option<Vec<Option<NonZeroU8>>>,
     // When sorting entries by |ent| order[ent.original_index], the rows are ordered.
     // also calculate this lazily
     order: Option<Vec<u32>>,
@@ -233,7 +230,7 @@ impl Alignment {
 
     fn new<T: BufRead>(file: T, uppercase: bool, must_aa: bool) -> Result<Alignment> {
         let reader = fasta::Reader::new(file);
-        let mut seqlength: Option<usize> = None;
+        let mut seqlength: Option<NonZeroUsize> = None;
         let mut entries = Vec::new();
 
         for (original_index, result) in reader.records().enumerate() {
@@ -243,20 +240,27 @@ impl Alignment {
             let record = result?;
             let graphemes = Graphemes::new(record.id());
             let seq = record.seq().to_vec();
+            let this_seq_len = match NonZeroUsize::new(seq.len()) {
+                None => {
+                    return Err(anyhow!(
+                        "Sequence \"{}\" has length zero, which is not allowed.",
+                        graphemes.string
+                    ))
+                }
+                Some(len) => len,
+            };
 
             // Check identical sequence lengths
             if let Some(len) = seqlength {
-                if seq.len() != len {
+                if len != this_seq_len {
                     return Err(anyhow!(
-                        "Not all input sequences are the same length. \
-                    Expected sequence length {}, seq \"{}\" has length {}.",
-                        len,
-                        &graphemes.string,
-                        seq.len()
+                        "Sequence \"{}\" has a different length than the previous sequence. \
+                        In an alignment, all sequences must have the same length.",
+                        graphemes.string
                     ));
                 }
             } else {
-                seqlength = Some(seq.len())
+                seqlength = Some(this_seq_len)
             }
 
             // start..stop is span of non-deleted symbols
@@ -287,10 +291,6 @@ impl Alignment {
 
         // Verify alphabet
         let is_aa = verify_alphabet(&entries, must_aa)?;
-
-        if seqlength.map_or(true, |i| i < 1) {
-            return Err(anyhow!("Alignment has no seqs, or seqs have length 0."));
-        }
 
         let longest_name = entries.iter().map(|v| v.graphemes.len()).max().unwrap();
         Ok(Alignment {
@@ -464,7 +464,7 @@ impl View {
         self.aln.entries.get(n).map(|x| &x.seq)
     }
 
-    pub fn consensus(&self) -> Option<&Vec<Option<u8>>> {
+    pub fn consensus(&self) -> Option<&Vec<Option<NonZeroU8>>> {
         self.aln.consensus.as_ref()
     }
 
