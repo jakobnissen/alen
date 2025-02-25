@@ -398,47 +398,52 @@ fn draw_consensus_other_seq<T: Write>(
 }
 
 fn get_color_background_dna(byte: u8) -> Option<Color> {
-    match byte {
-        b'a' | b'A' => Some(Color::AnsiValue(228)), // yellow
-        b'c' | b'C' => Some(Color::AnsiValue(77)),  // green
-        b'g' | b'G' => Some(Color::AnsiValue(39)),  // blue
-        b't' | b'T' | b'u' | b'U' => Some(Color::AnsiValue(168)), // pink
+    // See the comment for the equivalent AA function
+    match byte | 0b00100000 {
+        b'a' => Some(Color::AnsiValue(228)),        // yellow
+        b'c' => Some(Color::AnsiValue(77)),         // green
+        b'g' => Some(Color::AnsiValue(39)),         // blue
+        b't' | b'u' => Some(Color::AnsiValue(168)), // pink
         _ => None,
     }
 }
 
 fn get_color_background_aa(byte: u8) -> Option<Color> {
-    match byte {
+    // Since we know it's a ASCII letter or '*', we can set
+    // the 6th bit to 1 to make it lower case.
+    // This way, we don't need to handle uppercase in the match statement
+    // for '*', the 6th bit is always set, so it has no effect
+    match byte | 0b00100000 {
         // Negative (reds)
-        b'e' | b'E' => Some(Color::AnsiValue(198)),
-        b'd' | b'D' => Some(Color::AnsiValue(161)),
+        b'e' => Some(Color::AnsiValue(198)),
+        b'd' => Some(Color::AnsiValue(161)),
 
         // Positive (blues)
-        b'r' | b'R' => Some(Color::AnsiValue(39)),
-        b'k' | b'K' => Some(Color::AnsiValue(27)),
-        b'h' | b'H' => Some(Color::AnsiValue(32)),
+        b'r' => Some(Color::AnsiValue(39)),
+        b'k' => Some(Color::AnsiValue(27)),
+        b'h' => Some(Color::AnsiValue(32)),
 
         // Aromatic (yellows)
-        b'f' | b'F' => Some(Color::AnsiValue(184)),
-        b'w' | b'W' => Some(Color::AnsiValue(228)),
-        b'y' | b'Y' => Some(Color::AnsiValue(186)),
+        b'f' => Some(Color::AnsiValue(184)),
+        b'w' => Some(Color::AnsiValue(228)),
+        b'y' => Some(Color::AnsiValue(186)),
 
         // Aliphatic (greys)
-        b'a' | b'A' => Some(Color::AnsiValue(244)),
-        b'v' | b'V' => Some(Color::AnsiValue(246)),
-        b'l' | b'L' => Some(Color::AnsiValue(248)),
-        b'i' | b'I' => Some(Color::AnsiValue(250)),
-        b'm' | b'M' => Some(Color::AnsiValue(252)),
+        b'a' => Some(Color::AnsiValue(244)),
+        b'v' => Some(Color::AnsiValue(246)),
+        b'l' => Some(Color::AnsiValue(248)),
+        b'i' => Some(Color::AnsiValue(250)),
+        b'm' => Some(Color::AnsiValue(252)),
 
         // Neutral (greens)
-        b's' | b'S' => Some(Color::AnsiValue(40)),
-        b't' | b'T' => Some(Color::AnsiValue(42)),
-        b'n' | b'N' => Some(Color::AnsiValue(76)),
-        b'q' | b'Q' => Some(Color::AnsiValue(78)),
+        b's' => Some(Color::AnsiValue(40)),
+        b't' => Some(Color::AnsiValue(42)),
+        b'n' => Some(Color::AnsiValue(76)),
+        b'q' => Some(Color::AnsiValue(78)),
 
-        b'c' | b'C' => Some(Color::AnsiValue(112)),
-        b'p' | b'P' => Some(Color::AnsiValue(114)),
-        b'g' | b'G' => Some(Color::AnsiValue(149)),
+        b'c' => Some(Color::AnsiValue(112)),
+        b'p' => Some(Color::AnsiValue(114)),
+        b'g' => Some(Color::AnsiValue(149)),
         _ => None,
     }
 }

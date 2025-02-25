@@ -146,7 +146,7 @@ fn calculate_consensus<'a, T: Iterator<Item = &'a Vec<u8>>>(
         }
     }
 
-    return counts
+    counts
         .iter()
         .map(|arr| {
             let (most_common_byte, count) = arr
@@ -162,7 +162,7 @@ fn calculate_consensus<'a, T: Iterator<Item = &'a Vec<u8>>>(
                 Some(most_common_byte)
             }
         })
-        .collect();
+        .collect()
 }
 
 fn move_element<T>(v: &mut [T], from: usize, to: usize) -> Option<()> {
