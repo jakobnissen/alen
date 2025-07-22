@@ -6,7 +6,7 @@ use std::io::BufRead;
 use std::num::{NonZeroU8, NonZeroUsize};
 use std::ops::RangeInclusive;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -151,7 +151,7 @@ fn calculate_consensus<'a, T: Iterator<Item = &'a Vec<u8>>>(
     counts
         .iter()
         .map(|arr| {
-            let (index, count) = arr.iter().enumerate().max_by_key(|(_, &x)| x).unwrap();
+            let (index, count) = arr.iter().enumerate().max_by_key(|&(_, x)| x).unwrap();
 
             if *count == 0 {
                 None
@@ -245,7 +245,7 @@ impl Alignment {
                     return Err(anyhow!(
                         "Sequence \"{}\" has length zero, which is not allowed.",
                         graphemes.string
-                    ))
+                    ));
                 }
                 Some(len) => len,
             };

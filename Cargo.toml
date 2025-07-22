@@ -2,7 +2,7 @@
 name = "alen"
 version = "0.3.2"
 authors = ["Jakob Nybo Nissen <jakobnybonissen@gmail.com>"]
-edition = "2018"
+edition = "2024"
 license = "MIT"
 readme = "README.md"
 description = "A command-line program to view DNA, RNA or protein alignments in FASTA format."
@@ -19,5 +19,4 @@ regex = "1.11.1"
 unicode-segmentation = "1.12.0"
 
 [profile.release]
-strip = true
 lto = true

@@ -13,7 +13,7 @@ use data::{Graphemes, View};
 
 use std::cmp::min;
 use std::ffi::OsString;
-use std::io::{stdout, BufReader, Write};
+use std::io::{BufReader, Write, stdout};
 use std::num::NonZeroU8;
 use std::path::Path;
 
@@ -93,7 +93,7 @@ fn draw_default_footer<T: Write>(io: &mut TerminalIO<T>, view: &View) -> Result<
         io,
         view,
         "q/Esc: Quit | [^⇧] + ←/→/↑/↓: Move | ./,: Adjust names | ^f: Find | ^j: Jump | ^s: Select | c: Consensus | r: Redraw",
-        Color::Grey
+        Color::Grey,
     )
 }
 
