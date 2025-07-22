@@ -1100,7 +1100,7 @@ fn main() {
     }
 
     let (handle, _) = niffler::basic::from_path(args.alignment).unwrap_or_else(|err| {
-        println!("ERROR reading file: {}", err);
+        println!("ERROR reading file: {err}");
         std::process::exit(1)
     });
     let buffered_io = BufReader::new(handle);
@@ -1108,7 +1108,7 @@ fn main() {
     let view = View::from_reader(BufReader::new(buffered_io), args.uppercase, args.aminoacids);
     match view {
         Err(e) => {
-            println!("ERROR when loading FASTA: {}", e);
+            println!("ERROR when loading FASTA: {e}");
             std::process::exit(1);
         }
         Ok(mut view) => {
@@ -1120,7 +1120,7 @@ fn main() {
             terminal::enable_raw_mode().unwrap();
             execute!(io.io, terminal::EnterAlternateScreen, cursor::Hide,).unwrap();
             if let Err(e) = default_loop(&mut io, &mut view) {
-                println!("Error: {}", e);
+                println!("Error: {e}");
             }
             if io.has_color {
                 queue!(io.io, ResetColor).unwrap();
