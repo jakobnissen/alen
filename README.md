@@ -28,9 +28,15 @@ $ cargo build --release
 Simple usage:
 ```
 $ alen /path/to/alignment.fasta
+
+$ alen /path/to/alignment.fasta.gz # supports compressed files
 ```
 
-Note that Alen loads in the entire alignment into memory, so don't use it for multi-gigabyte files. Alen will auto-detect whether the alignment is a nucleotide or amino acid. For more help, type `alen --help` in the terminal.
+Note that Alen loads in the entire alignment into memory, so don't use it for multi-gigabyte files. Alen will auto-detect whether the alignment is a nucleotide or amino acid.
+
+Alen supports various compressed formats including `gzip` and `zstd`.
+
+For more help, type `alen --help` in the terminal.
 
 __Commands__
 

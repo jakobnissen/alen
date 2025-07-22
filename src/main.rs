@@ -1098,12 +1098,13 @@ fn main() {
         println!("ERROR: Filename not found: {:?}", args.alignment);
         std::process::exit(1);
     }
-    let file = std::fs::File::open(args.alignment).unwrap_or_else(|err| {
+
+    let (handle, _) = niffler::basic::from_path(args.alignment).unwrap_or_else(|err| {
         println!("ERROR reading file: {}", err);
         std::process::exit(1)
     });
+    let buffered_io = BufReader::new(handle);
 
-    let buffered_io = BufReader::new(file);
     let view = View::from_reader(BufReader::new(buffered_io), args.uppercase, args.aminoacids);
     match view {
         Err(e) => {
