@@ -1,6 +1,6 @@
 [package]
 name = "alen"
-version = "0.3.1"
+version = "0.3.2"
 authors = ["Jakob Nybo Nissen <jakobnybonissen@gmail.com>"]
 edition = "2018"
 license = "MIT"
@@ -10,13 +10,13 @@ description = "A command-line program to view DNA, RNA or protein alignments in 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-anyhow = "1.0.71"
-bio = "1.1.0"
-clap = {version = "4.3.0", features = ["derive", "std"]}
-crossterm = "0.26.1"
+anyhow = "1.0.98"
+bio = "2.3.0"
+clap = {version = "4.5.41", features = ["derive", "std"]}
+crossterm = "0.29.0"
 niffler = "3.0.0"
-regex = "1.8.2"
-unicode-segmentation = "1.10.1"
+regex = "1.11.1"
+unicode-segmentation = "1.12.0"
 
 [profile.release]
 strip = true
