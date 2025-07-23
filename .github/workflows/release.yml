@@ -63,6 +63,10 @@ jobs:
       with:
         toolchain: stable
         target: x86_64-unknown-linux-musl
+    - name: Install musl dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install musl-tools
     - name: Build
       uses: actions-rs/cargo@v1
       with:
