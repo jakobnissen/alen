@@ -1,5 +1,7 @@
 use crate::constants::{FOOTER_LINES, HEADER_LINES};
+use crate::translate::TranslationError;
 
+use std::cell::OnceCell;
 use std::cmp::{max, min};
 use std::convert::TryInto;
 use std::io::BufRead;
@@ -211,14 +213,16 @@ pub struct Alignment {
     // longest as in number of graphemes. We cache this for efficiency, it can be
     // computed from the graphemes field easily
     longest_name: usize,
-    // we calculate this lazily upon demand
-    consensus: Option<Vec<Option<NonZeroU8>>>,
+    // we calculate this lazily upon demand (for nucleotide view)
+    consensus: OnceCell<Vec<Option<NonZeroU8>>>,
+    // consensus for translated protein view (separate cache)
+    translated_consensus: OnceCell<Vec<Option<NonZeroU8>>>,
     // When sorting entries by |ent| order[ent.original_index], the rows are ordered.
     // also calculate this lazily
-    order: Option<Vec<u32>>,
+    order: OnceCell<Vec<u32>>,
     is_aa: bool,
-    // Translated protein sequences (lazily computed)
-    translated: Option<Vec<Vec<u8>>>,
+    // Translated protein sequences (lazily computed, Result for error handling)
+    translated: OnceCell<Result<Vec<Vec<u8>>, TranslationError>>,
 }
 
 impl Alignment {
@@ -298,10 +302,11 @@ impl Alignment {
         Ok(Alignment {
             entries,
             longest_name,
-            consensus: None,
-            order: None,
+            consensus: OnceCell::new(),
+            translated_consensus: OnceCell::new(),
+            order: OnceCell::new(),
             is_aa,
-            translated: None,
+            translated: OnceCell::new(),
         })
     }
 
@@ -312,7 +317,9 @@ impl Alignment {
 
         // If already ordered or 2 or fewer rows, ordering doesn't matter
         if self.nrows() < 3 {
-            self.order = Some((0..(self.nrows().try_into().unwrap())).collect());
+            let _ = self
+                .order
+                .set((0..(self.nrows().try_into().unwrap())).collect());
             return;
         }
 
@@ -378,14 +385,14 @@ impl Alignment {
             ord[*o] = i.try_into().unwrap()
         }
 
-        self.order = Some(ord)
+        let _ = self.order.set(ord);
     }
 
     fn order(&mut self) {
-        if self.order.is_none() {
+        if self.order.get().is_none() {
             self.sort_and_set_order()
         }
-        let order = self.order.as_ref().unwrap();
+        let order = self.order.get().unwrap();
         self.entries
             .sort_unstable_by(|a, b| order[a.original_index].cmp(&order[b.original_index]));
     }
@@ -469,62 +476,65 @@ impl View {
         self.aln.entries.get(n).map(|x| &x.seq)
     }
 
-    pub fn consensus(&self) -> Option<&Vec<Option<NonZeroU8>>> {
-        self.aln.consensus.as_ref()
-    }
-
-    pub fn calculate_consensus(&mut self) {
-        let v = if self.translated {
-            // Calculate consensus on translated sequences
-            Some(calculate_consensus(
-                &mut self.translated_seqs().unwrap().iter(),
-                self.ncols(),
-                true, // translated sequences are amino acids
-            ))
+    /// Get the consensus sequence for the current view (nucleotide or translated).
+    /// Computes lazily on first access for each mode.
+    pub fn consensus(&self) -> &Vec<Option<NonZeroU8>> {
+        if self.translated {
+            self.aln.translated_consensus.get_or_init(|| {
+                // Need to get translated sequences first
+                let seqs = self.translated_seqs().unwrap();
+                calculate_consensus(&mut seqs.iter(), seqs[0].len(), true)
+            })
         } else {
-            Some(calculate_consensus(
-                &mut self.seqs(),
-                self.ncols(),
-                self.is_aa(),
-            ))
-        };
-        self.aln.consensus = v
+            self.aln.consensus.get_or_init(|| {
+                calculate_consensus(&mut self.seqs(), self.aln.ncols(), self.aln.is_aa)
+            })
+        }
     }
 
-    pub fn clear_consensus(&mut self) {
-        self.aln.consensus = None;
+    /// Check if consensus has been computed for current view mode
+    pub fn consensus_computed(&self) -> bool {
+        if self.translated {
+            self.aln.translated_consensus.get().is_some()
+        } else {
+            self.aln.consensus.get().is_some()
+        }
     }
 
     pub fn is_aa(&self) -> bool {
         self.aln.is_aa
     }
 
-    /// Check if source is DNA (translation only valid for DNA)
+    /// Check if source is nucleotide (translation only valid for DNA / RNA)
     pub fn can_translate(&self) -> bool {
         !self.aln.is_aa
     }
 
-    /// Get translated sequences (computed lazily)
-    pub fn translated_seqs(&self) -> Option<&Vec<Vec<u8>>> {
-        self.aln.translated.as_ref()
+    /// Check if translation has been computed
+    pub fn translation_computed(&self) -> bool {
+        self.aln.translated.get().is_some()
     }
 
-    /// Get a single translated sequence by index
-    pub fn translated_seq(&self, n: usize) -> Option<&Vec<u8>> {
-        self.aln.translated.as_ref()?.get(n)
-    }
-
-    /// Calculate and cache translated sequences
-    pub fn calculate_translation(&mut self) {
-        if self.aln.translated.is_none() {
-            self.aln.translated = Some(
+    /// Get translated sequences (computed lazily).
+    /// Returns Ok(&sequences) on success, Err(&error) if translation failed.
+    pub fn translated_seqs(&self) -> Result<&Vec<Vec<u8>>, &TranslationError> {
+        self.aln
+            .translated
+            .get_or_init(|| {
                 self.aln
                     .entries
                     .iter()
                     .map(|e| crate::translate::translate_sequence(&e.seq))
-                    .collect(),
-            );
-        }
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .as_ref()
+    }
+
+    /// Get a single translated sequence by index.
+    /// Panics on out-of-bounds (programmer error).
+    pub fn translated_seq(&self, n: usize) -> Option<&Vec<u8>> {
+        let seqs = self.translated_seqs().ok()?;
+        Some(&seqs[n])
     }
 
     /// Resize the view to the current terminal window, but do not draw anything
@@ -581,7 +591,7 @@ impl View {
 
     pub fn ncols(&self) -> usize {
         if self.translated {
-            self.aln.ncols() / 3
+            self.aln.ncols().div_ceil(3)
         } else {
             self.aln.ncols()
         }

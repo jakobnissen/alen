@@ -92,7 +92,11 @@ fn draw_footer_text<T: Write>(
 fn draw_default_footer<T: Write>(io: &mut TerminalIO<T>, view: &View) -> Result<()> {
     let base_footer = "q/Esc: Quit | [^⇧] + ←/→/↑/↓: Move | ./,: Adjust names | ^f: Find | ^j: Jump | ^s: Select | c: Consensus";
     let footer = if view.can_translate() {
-        format!("{} | t: Translate | r: Redraw", base_footer)
+        if view.translated {
+            format!("{} | t: Nucl view | r: Redraw", base_footer)
+        } else {
+            format!("{} | t: Translate | r: Redraw", base_footer)
+        }
     } else {
         format!("{} | r: Redraw", base_footer)
     };
@@ -146,6 +150,11 @@ fn draw_jump_footer<T: Write>(
     text.push_str(query);
     draw_footer_text(io, view, &text, background_color)?;
     Ok(())
+}
+
+fn draw_error_footer<T: Write>(io: &mut TerminalIO<T>, view: &View, error: &str) -> Result<()> {
+    let text = format!("[Press any key] Error: {}", error);
+    draw_footer_text(io, view, &text, Color::Red)
 }
 
 // ================================= Ruler =================================
@@ -341,8 +350,8 @@ fn draw_consensus_sequences<T: Write>(io: &mut TerminalIO<T>, view: &View) -> Re
     let is_aa = view.is_aa() || view.translated;
 
     // First draw top row
-    let x = view.consensus().unwrap();
-    let cons_seq = &x[col_range.clone()];
+    let cons = view.consensus();
+    let cons_seq = &cons[col_range.clone()];
     draw_top_consensus(io, view.namewidth + 1, is_aa, cons_seq)?;
 
     // Then draw rest, if applicable
@@ -690,7 +699,8 @@ fn default_loop<T: Write>(io: &mut TerminalIO<T>, view: &mut View) -> Result<()>
                 if kevent == KeyEvent::new(KeyCode::Char('c'), event::KeyModifiers::NONE)
                     || kevent == KeyEvent::new(KeyCode::Char('C'), event::KeyModifiers::NONE)
                 {
-                    if view.consensus().is_none() {
+                    // Show message if consensus not yet computed for current mode
+                    if !view.consensus_computed() {
                         execute!(
                             io.io,
                             ResetColor,
@@ -698,7 +708,8 @@ fn default_loop<T: Write>(io: &mut TerminalIO<T>, view: &mut View) -> Result<()>
                             cursor::MoveTo(0, 0),
                             Print("Calculating consensus..."),
                         )?;
-                        view.calculate_consensus()
+                        // Access consensus to trigger computation
+                        let _ = view.consensus();
                     }
                     view.consensus = !view.consensus;
 
@@ -711,13 +722,13 @@ fn default_loop<T: Write>(io: &mut TerminalIO<T>, view: &mut View) -> Result<()>
                     continue;
                 };
 
-                // Toggle translation view (DNA only)
+                // Toggle translation view (nucleotide only)
                 if kevent == KeyEvent::new(KeyCode::Char('t'), event::KeyModifiers::NONE)
                     || kevent == KeyEvent::new(KeyCode::Char('T'), event::KeyModifiers::NONE)
                 {
                     if view.can_translate() {
-                        // Calculate translation if not done yet
-                        if view.translated_seqs().is_none() {
+                        // Show message if translation not yet computed
+                        if !view.translation_computed() {
                             execute!(
                                 io.io,
                                 ResetColor,
@@ -725,7 +736,18 @@ fn default_loop<T: Write>(io: &mut TerminalIO<T>, view: &mut View) -> Result<()>
                                 cursor::MoveTo(0, 0),
                                 Print("Translating sequences..."),
                             )?;
-                            view.calculate_translation()
+                        }
+
+                        // Check for translation errors
+                        if let Err(e) = view.translated_seqs() {
+                            // Display error and wait for keypress
+                            draw_default_mode_screen(io, view)?;
+                            draw_error_footer(io, view, &e.to_string())?;
+                            io.io.flush()?;
+                            event::read()?; // Wait for any key
+                            draw_default_footer(io, view)?;
+                            io.io.flush()?;
+                            continue;
                         }
 
                         // Toggle translation mode
@@ -738,10 +760,10 @@ fn default_loop<T: Write>(io: &mut TerminalIO<T>, view: &mut View) -> Result<()>
                             view.colstart *= 3;
                         }
 
-                        // Clear consensus when switching modes (different alphabets)
+                        // Turn off consensus display when switching modes (different alphabets)
+                        // Note: consensus caches are preserved for each mode
                         if view.consensus {
                             view.consensus = false;
-                            view.clear_consensus();
                             view.move_view(-1, 0);
                         }
 
