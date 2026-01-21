@@ -217,6 +217,8 @@ pub struct Alignment {
     // also calculate this lazily
     order: Option<Vec<u32>>,
     is_aa: bool,
+    // Translated protein sequences (lazily computed)
+    translated: Option<Vec<Vec<u8>>>,
 }
 
 impl Alignment {
@@ -299,6 +301,7 @@ impl Alignment {
             consensus: None,
             order: None,
             is_aa,
+            translated: None,
         })
     }
 
@@ -422,6 +425,7 @@ pub struct View {
     pub term_ncols: u16,
     pub namewidth: u16,  // number of graphemes of each name displayed
     pub consensus: bool, // if consensus view is shown
+    pub translated: bool, // if showing translated protein view (DNA only)
     aln: Alignment,
 }
 
@@ -435,6 +439,7 @@ impl View {
             term_ncols: 0,
             namewidth: 0,
             consensus: false,
+            translated: false,
             aln,
         };
         // We need to resize before we resize names, because the latter
@@ -469,16 +474,57 @@ impl View {
     }
 
     pub fn calculate_consensus(&mut self) {
-        let v = Some(calculate_consensus(
-            &mut self.seqs(),
-            self.ncols(),
-            self.is_aa(),
-        ));
+        let v = if self.translated {
+            // Calculate consensus on translated sequences
+            Some(calculate_consensus(
+                &mut self.translated_seqs().unwrap().iter(),
+                self.ncols(),
+                true, // translated sequences are amino acids
+            ))
+        } else {
+            Some(calculate_consensus(
+                &mut self.seqs(),
+                self.ncols(),
+                self.is_aa(),
+            ))
+        };
         self.aln.consensus = v
+    }
+
+    pub fn clear_consensus(&mut self) {
+        self.aln.consensus = None;
     }
 
     pub fn is_aa(&self) -> bool {
         self.aln.is_aa
+    }
+
+    /// Check if source is DNA (translation only valid for DNA)
+    pub fn can_translate(&self) -> bool {
+        !self.aln.is_aa
+    }
+
+    /// Get translated sequences (computed lazily)
+    pub fn translated_seqs(&self) -> Option<&Vec<Vec<u8>>> {
+        self.aln.translated.as_ref()
+    }
+
+    /// Get a single translated sequence by index
+    pub fn translated_seq(&self, n: usize) -> Option<&Vec<u8>> {
+        self.aln.translated.as_ref()?.get(n)
+    }
+
+    /// Calculate and cache translated sequences
+    pub fn calculate_translation(&mut self) {
+        if self.aln.translated.is_none() {
+            self.aln.translated = Some(
+                self.aln
+                    .entries
+                    .iter()
+                    .map(|e| crate::translate::translate_sequence(&e.seq))
+                    .collect(),
+            );
+        }
     }
 
     /// Resize the view to the current terminal window, but do not draw anything
@@ -534,7 +580,11 @@ impl View {
     }
 
     pub fn ncols(&self) -> usize {
-        self.aln.ncols()
+        if self.translated {
+            self.aln.ncols() / 3
+        } else {
+            self.aln.ncols()
+        }
     }
 
     pub fn seq_nrows_display(&self) -> usize {
