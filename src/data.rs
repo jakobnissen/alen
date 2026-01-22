@@ -311,16 +311,10 @@ impl Alignment {
     }
 
     /// Reorder the vectors of the alignment such that similar rows are next to each other.
-    fn sort_and_set_order(&mut self) {
-        self.entries
-            .sort_unstable_by(|a, b| a.original_index.cmp(&b.original_index));
-
+    fn compute_order(&self) -> Vec<u32> {
         // If already ordered or 2 or fewer rows, ordering doesn't matter
         if self.nrows() < 3 {
-            let _ = self
-                .order
-                .set((0..(self.nrows().try_into().unwrap())).collect());
-            return;
+            return (0..(self.nrows().try_into().unwrap())).collect();
         }
 
         // Choices only appear when placing the 3rd seq, so first two are given.
@@ -385,14 +379,11 @@ impl Alignment {
             ord[*o] = i.try_into().unwrap()
         }
 
-        let _ = self.order.set(ord);
+        ord
     }
 
     fn order(&mut self) {
-        if self.order.get().is_none() {
-            self.sort_and_set_order()
-        }
-        let order = self.order.get().unwrap();
+        let order = self.order.get_or_init(|| self.compute_order());
         self.entries
             .sort_unstable_by(|a, b| order[a.original_index].cmp(&order[b.original_index]));
     }
