@@ -390,10 +390,9 @@ impl Alignment {
         // are different
         // We sort in O(n) here
         for i in 0..self.entries.len() {
-            let mut dst = self.entries[i].original_index;
             while self.entries[i].original_index != i {
+                let dst = self.entries[i].original_index;
                 self.entries.swap(i, dst);
-                dst = self.entries[i].original_index;
             }
         }
 
@@ -401,10 +400,9 @@ impl Alignment {
 
         // Now sort by order in O(n)
         for i in 0..self.entries.len() {
-            let mut dst = order[self.entries[i].original_index] as usize;
             while order[self.entries[i].original_index] as usize != i {
+                let dst = order[self.entries[i].original_index] as usize;
                 self.entries.swap(i, dst);
-                dst = order[self.entries[i].original_index] as usize;
             }
         }
     }
