@@ -7,6 +7,7 @@
 
 mod constants;
 mod data;
+mod translate;
 
 use constants::HEADER_LINES;
 use data::{Graphemes, View};
@@ -89,12 +90,17 @@ fn draw_footer_text<T: Write>(
 }
 
 fn draw_default_footer<T: Write>(io: &mut TerminalIO<T>, view: &View) -> Result<()> {
-    draw_footer_text(
-        io,
-        view,
-        "q/Esc: Quit | [^⇧] + ←/→/↑/↓: Move | ./,: Adjust names | ^f: Find | ^j: Jump | ^s: Select | c: Consensus | r: Redraw",
-        Color::Grey,
-    )
+    let base_footer = "q/Esc: Quit | [^⇧] + ←/→/↑/↓: Move | ./,: Adjust names | ^f: Find | ^j: Jump | ^s: Select | c: Consensus";
+    let footer = if view.can_translate() {
+        if view.translated {
+            format!("{} | t: Nucl view | r: Redraw", base_footer)
+        } else {
+            format!("{} | t: Translate | r: Redraw", base_footer)
+        }
+    } else {
+        format!("{} | r: Redraw", base_footer)
+    };
+    draw_footer_text(io, view, &footer, Color::Grey)
 }
 
 fn draw_select_footer<T: Write>(io: &mut TerminalIO<T>, view: &View) -> Result<()> {
@@ -146,6 +152,11 @@ fn draw_jump_footer<T: Write>(
     Ok(())
 }
 
+fn draw_error_footer<T: Write>(io: &mut TerminalIO<T>, view: &View, error: &str) -> Result<()> {
+    let text = format!("[Press any key] Error: {}", error);
+    draw_footer_text(io, view, &text, Color::Red)
+}
+
 // ================================= Ruler =================================
 
 fn draw_ruler<T: Write>(io: &mut TerminalIO<T>, view: &View) -> Result<()> {
@@ -168,14 +179,18 @@ fn draw_ruler<T: Write>(io: &mut TerminalIO<T>, view: &View) -> Result<()> {
     // Make the bottom line with the ticks
     let tick_string = {
         let aln_range = view.colstart..=(view.colstart + view.seq_ncols_display() - 1);
-        let mut tick_string = if view.colstart % 10 == 0 {
+        let mut tick_string = if view.colstart.is_multiple_of(10) {
             "├"
         } else {
             "┌"
         }
         .to_owned();
         for alncol in aln_range {
-            tick_string.push(if (alncol + 1) % 10 == 0 { '┴' } else { '─' })
+            tick_string.push(if (alncol + 1).is_multiple_of(10) {
+                '┴'
+            } else {
+                '─'
+            })
         }
         tick_string
     };
@@ -298,8 +313,16 @@ fn draw_nonconsensus_sequences<T: Write>(io: &mut TerminalIO<T>, view: &View) ->
 
     for (i, alnrow) in row_range.enumerate() {
         let termrow = (i + HEADER_LINES) as u16;
-        let seq = &view.seq(alnrow).unwrap()[col_range.clone()];
-        draw_sequence(io, view.namewidth + 1, view.is_aa(), seq, termrow)?;
+        let (seq, is_aa): (&[u8], bool) = if view.translated {
+            // Use translated protein sequences
+            (
+                &view.translated_seq(alnrow).unwrap()[col_range.clone()],
+                true,
+            )
+        } else {
+            (&view.seq(alnrow).unwrap()[col_range.clone()], view.is_aa())
+        };
+        draw_sequence(io, view.namewidth + 1, is_aa, seq, termrow)?;
     }
     Ok(())
 }
@@ -330,18 +353,24 @@ fn draw_consensus_sequences<T: Write>(io: &mut TerminalIO<T>, view: &View) -> Re
         None => return Ok(()),
     };
 
+    // Determine if we're in amino acid mode (either native AA or translated DNA)
+    let is_aa = view.is_aa() || view.translated;
+
     // First draw top row
-    let x = view.consensus().unwrap();
-    let cons_seq = &x[col_range.clone()];
-    //let cons_seq = &view.consensus().unwrap().as_ref()[col_range.clone()];
-    draw_top_consensus(io, view.namewidth + 1, view.is_aa(), cons_seq)?;
+    let cons = view.consensus();
+    let cons_seq = &cons[col_range.clone()];
+    draw_top_consensus(io, view.namewidth + 1, is_aa, cons_seq)?;
 
     // Then draw rest, if applicable
     if let Some(alnrows) = view.seq_row_range() {
         for (i, alnrow) in alnrows.enumerate() {
             let termrow = (i + HEADER_LINES + 1) as u16;
-            let seq = &view.seq(alnrow).unwrap()[col_range.clone()];
-            draw_consensus_other_seq(io, view.namewidth + 1, termrow, view.is_aa(), seq, cons_seq)?
+            let seq: &[u8] = if view.translated {
+                &view.translated_seq(alnrow).unwrap()[col_range.clone()]
+            } else {
+                &view.seq(alnrow).unwrap()[col_range.clone()]
+            };
+            draw_consensus_other_seq(io, view.namewidth + 1, termrow, is_aa, seq, cons_seq)?
         }
     }
     Ok(())
@@ -677,7 +706,8 @@ fn default_loop<T: Write>(io: &mut TerminalIO<T>, view: &mut View) -> Result<()>
                 if kevent == KeyEvent::new(KeyCode::Char('c'), event::KeyModifiers::NONE)
                     || kevent == KeyEvent::new(KeyCode::Char('C'), event::KeyModifiers::NONE)
                 {
-                    if view.consensus().is_none() {
+                    // Show message if consensus not yet computed for current mode
+                    if !view.consensus_computed() {
                         execute!(
                             io.io,
                             ResetColor,
@@ -685,7 +715,8 @@ fn default_loop<T: Write>(io: &mut TerminalIO<T>, view: &mut View) -> Result<()>
                             cursor::MoveTo(0, 0),
                             Print("Calculating consensus..."),
                         )?;
-                        view.calculate_consensus()
+                        // Access consensus to trigger computation
+                        let _ = view.consensus();
                     }
                     view.consensus = !view.consensus;
 
@@ -694,6 +725,55 @@ fn default_loop<T: Write>(io: &mut TerminalIO<T>, view: &mut View) -> Result<()>
                     // from going out of bounds when toggling consensus
                     let delta = if view.consensus { 1 } else { -1 };
                     view.move_view(delta, 0);
+                    draw_default_mode_screen(io, view)?;
+                    continue;
+                };
+
+                // Toggle translation view (nucleotide only)
+                if (kevent == KeyEvent::new(KeyCode::Char('t'), event::KeyModifiers::NONE)
+                    || kevent == KeyEvent::new(KeyCode::Char('T'), event::KeyModifiers::NONE))
+                    && view.can_translate()
+                {
+                    // Show message if translation not yet computed
+                    if !view.translation_computed() {
+                        execute!(
+                            io.io,
+                            ResetColor,
+                            terminal::Clear(ClearType::All),
+                            cursor::MoveTo(0, 0),
+                            Print("Translating sequences..."),
+                        )?;
+                    }
+
+                    // Check for translation errors
+                    if let Err(e) = view.translated_seqs() {
+                        // Display error and wait for keypress
+                        draw_default_mode_screen(io, view)?;
+                        draw_error_footer(io, view, &e.to_string())?;
+                        io.io.flush()?;
+                        event::read()?; // Wait for any key
+                        draw_default_footer(io, view)?;
+                        io.io.flush()?;
+                        continue;
+                    }
+
+                    // Toggle translation mode
+                    view.translated = !view.translated;
+
+                    // Adjust column position: 3 DNA bases = 1 amino acid
+                    if view.translated {
+                        view.colstart /= 3;
+                    } else {
+                        view.colstart *= 3;
+                    }
+
+                    // Turn off consensus display when switching modes (different alphabets)
+                    // Note: consensus caches are preserved for each mode
+                    if view.consensus {
+                        view.consensus = false;
+                        view.move_view(-1, 0);
+                    }
+
                     draw_default_mode_screen(io, view)?;
                     continue;
                 };
@@ -838,7 +918,13 @@ fn search_loop<T: Write>(io: &mut TerminalIO<T>, view: &mut View) -> Result<()> 
                         let seq_col =
                             start.saturating_sub(view.colstart) as u16 + (view.namewidth + 1);
                         let highlight_str = unsafe {
-                            std::str::from_utf8_unchecked(&view.seq(row).unwrap()[start..stop])
+                            if view.translated {
+                                std::str::from_utf8_unchecked(
+                                    &view.translated_seq(row).unwrap()[start..stop],
+                                )
+                            } else {
+                                std::str::from_utf8_unchecked(&view.seq(row).unwrap()[start..stop])
+                            }
                         };
                         draw_highlight(io, seq_row, seq_col, view.term_ncols, highlight_str)?;
                         select_loop(io, view, row)?;
@@ -879,17 +965,30 @@ fn search_query(view: &View, query: &str) -> SearchResult {
         }
     }
 
-    // Then search the sequences
-    for (rowno, seq) in view.seqs().enumerate() {
-        // We have checked on instantiation that this is OK, and do not provide
-        // any functionality to mutate the sequences
-        let string = unsafe { std::str::from_utf8_unchecked(seq) };
-        if let Some(regex_match) = re.find(string) {
-            return SearchResult::MatchSeq {
-                row: rowno,
-                start: regex_match.start(),
-                stop: regex_match.end(),
-            };
+    // Then search the sequences (use translated if in translated mode)
+    if view.translated {
+        for (rowno, seq) in view.translated_seqs().unwrap().iter().enumerate() {
+            let string = unsafe { std::str::from_utf8_unchecked(seq) };
+            if let Some(regex_match) = re.find(string) {
+                return SearchResult::MatchSeq {
+                    row: rowno,
+                    start: regex_match.start(),
+                    stop: regex_match.end(),
+                };
+            }
+        }
+    } else {
+        for (rowno, seq) in view.seqs().enumerate() {
+            // We have checked on instantiation that this is OK, and do not provide
+            // any functionality to mutate the sequences
+            let string = unsafe { std::str::from_utf8_unchecked(seq) };
+            if let Some(regex_match) = re.find(string) {
+                return SearchResult::MatchSeq {
+                    row: rowno,
+                    start: regex_match.start(),
+                    stop: regex_match.end(),
+                };
+            }
         }
     }
     SearchResult::NoMatch

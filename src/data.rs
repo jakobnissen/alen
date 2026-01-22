@@ -1,5 +1,7 @@
 use crate::constants::{FOOTER_LINES, HEADER_LINES};
+use crate::translate::TranslationError;
 
+use std::cell::OnceCell;
 use std::cmp::{max, min};
 use std::convert::TryInto;
 use std::io::BufRead;
@@ -211,12 +213,16 @@ pub struct Alignment {
     // longest as in number of graphemes. We cache this for efficiency, it can be
     // computed from the graphemes field easily
     longest_name: usize,
-    // we calculate this lazily upon demand
-    consensus: Option<Vec<Option<NonZeroU8>>>,
+    // we calculate this lazily upon demand (for nucleotide view)
+    consensus: OnceCell<Vec<Option<NonZeroU8>>>,
+    // consensus for translated protein view (separate cache)
+    translated_consensus: OnceCell<Vec<Option<NonZeroU8>>>,
     // When sorting entries by |ent| order[ent.original_index], the rows are ordered.
     // also calculate this lazily
-    order: Option<Vec<u32>>,
+    order: OnceCell<Vec<u32>>,
     is_aa: bool,
+    // Translated protein sequences (lazily computed, Result for error handling)
+    translated: OnceCell<Result<Vec<Vec<u8>>, TranslationError>>,
 }
 
 impl Alignment {
@@ -296,21 +302,19 @@ impl Alignment {
         Ok(Alignment {
             entries,
             longest_name,
-            consensus: None,
-            order: None,
+            consensus: OnceCell::new(),
+            translated_consensus: OnceCell::new(),
+            order: OnceCell::new(),
             is_aa,
+            translated: OnceCell::new(),
         })
     }
 
     /// Reorder the vectors of the alignment such that similar rows are next to each other.
-    fn sort_and_set_order(&mut self) {
-        self.entries
-            .sort_unstable_by(|a, b| a.original_index.cmp(&b.original_index));
-
+    fn compute_order(&self) -> Vec<u32> {
         // If already ordered or 2 or fewer rows, ordering doesn't matter
         if self.nrows() < 3 {
-            self.order = Some((0..(self.nrows().try_into().unwrap())).collect());
-            return;
+            return (0..(self.nrows().try_into().unwrap())).collect();
         }
 
         // Choices only appear when placing the 3rd seq, so first two are given.
@@ -375,14 +379,11 @@ impl Alignment {
             ord[*o] = i.try_into().unwrap()
         }
 
-        self.order = Some(ord)
+        ord
     }
 
     fn order(&mut self) {
-        if self.order.is_none() {
-            self.sort_and_set_order()
-        }
-        let order = self.order.as_ref().unwrap();
+        let order = self.order.get_or_init(|| self.compute_order());
         self.entries
             .sort_unstable_by(|a, b| order[a.original_index].cmp(&order[b.original_index]));
     }
@@ -420,8 +421,9 @@ pub struct View {
     pub colstart: usize,
     pub term_nrows: u16, // obtained from terminal
     pub term_ncols: u16,
-    pub namewidth: u16,  // number of graphemes of each name displayed
-    pub consensus: bool, // if consensus view is shown
+    pub namewidth: u16,   // number of graphemes of each name displayed
+    pub consensus: bool,  // if consensus view is shown
+    pub translated: bool, // if showing translated protein view (DNA only)
     aln: Alignment,
 }
 
@@ -435,6 +437,7 @@ impl View {
             term_ncols: 0,
             namewidth: 0,
             consensus: false,
+            translated: false,
             aln,
         };
         // We need to resize before we resize names, because the latter
@@ -464,21 +467,65 @@ impl View {
         self.aln.entries.get(n).map(|x| &x.seq)
     }
 
-    pub fn consensus(&self) -> Option<&Vec<Option<NonZeroU8>>> {
-        self.aln.consensus.as_ref()
+    /// Get the consensus sequence for the current view (nucleotide or translated).
+    /// Computes lazily on first access for each mode.
+    pub fn consensus(&self) -> &Vec<Option<NonZeroU8>> {
+        if self.translated {
+            self.aln.translated_consensus.get_or_init(|| {
+                // Need to get translated sequences first
+                let seqs = self.translated_seqs().unwrap();
+                calculate_consensus(&mut seqs.iter(), seqs[0].len(), true)
+            })
+        } else {
+            self.aln.consensus.get_or_init(|| {
+                calculate_consensus(&mut self.seqs(), self.aln.ncols(), self.aln.is_aa)
+            })
+        }
     }
 
-    pub fn calculate_consensus(&mut self) {
-        let v = Some(calculate_consensus(
-            &mut self.seqs(),
-            self.ncols(),
-            self.is_aa(),
-        ));
-        self.aln.consensus = v
+    /// Check if consensus has been computed for current view mode
+    pub fn consensus_computed(&self) -> bool {
+        if self.translated {
+            self.aln.translated_consensus.get().is_some()
+        } else {
+            self.aln.consensus.get().is_some()
+        }
     }
 
     pub fn is_aa(&self) -> bool {
         self.aln.is_aa
+    }
+
+    /// Check if source is nucleotide (translation only valid for DNA / RNA)
+    pub fn can_translate(&self) -> bool {
+        !self.aln.is_aa
+    }
+
+    /// Check if translation has been computed
+    pub fn translation_computed(&self) -> bool {
+        self.aln.translated.get().is_some()
+    }
+
+    /// Get translated sequences (computed lazily).
+    /// Returns Ok(&sequences) on success, Err(&error) if translation failed.
+    pub fn translated_seqs(&self) -> Result<&Vec<Vec<u8>>, &TranslationError> {
+        self.aln
+            .translated
+            .get_or_init(|| {
+                self.aln
+                    .entries
+                    .iter()
+                    .map(|e| crate::translate::translate_sequence(&e.seq))
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .as_ref()
+    }
+
+    /// Get a single translated sequence by index.
+    /// Panics on out-of-bounds (programmer error).
+    pub fn translated_seq(&self, n: usize) -> Option<&Vec<u8>> {
+        let seqs = self.translated_seqs().ok()?;
+        Some(&seqs[n])
     }
 
     /// Resize the view to the current terminal window, but do not draw anything
@@ -534,7 +581,11 @@ impl View {
     }
 
     pub fn ncols(&self) -> usize {
-        self.aln.ncols()
+        if self.translated {
+            self.aln.ncols().div_ceil(3)
+        } else {
+            self.aln.ncols()
+        }
     }
 
     pub fn seq_nrows_display(&self) -> usize {

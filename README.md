@@ -42,6 +42,7 @@ __Commands__
 
 * `Esc / q / Ctrl-C`: Quit
 * `c`: Toggle consensus sequence comparison
+* `t`: Toggle DNA to protein translation (DNA alignments only)
 * `r`: Re-render the screen.
 * `Ctrl-f`: Find. Searches headers, then sequences for regex, case insensitively.
 * `Ctrl-j`: Jump to column.
