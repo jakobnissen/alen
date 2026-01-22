@@ -312,16 +312,17 @@ impl Alignment {
 
     /// Reorder the vectors of the alignment such that similar rows are next to each other.
     fn compute_order(&self) -> Vec<u32> {
+        // We do this in the caller, to simplify the logic here, so we don't have
+        // to handle differing indices and original indices
+        assert!(self.entries.is_sorted_by_key(|e| e.original_index));
+
         // If already ordered or 2 or fewer rows, ordering doesn't matter
         if self.nrows() < 3 {
             return (0..(self.nrows().try_into().unwrap())).collect();
         }
 
         // Choices only appear when placing the 3rd seq, so first two are given.
-        let mut order: Vec<usize> = vec![
-            self.entries[0].original_index,
-            self.entries[1].original_index,
-        ];
+        let mut order: Vec<usize> = vec![0, 1];
         let mut neighbor_distances = vec![jaccard_distance(&self.entries[0], &self.entries[1])];
         let mut distances: Vec<f32> = Vec::with_capacity(self.nrows());
 
@@ -353,7 +354,7 @@ impl Alignment {
                 }
             }
 
-            order.insert(min_index, self.entries[seqindex].original_index);
+            order.insert(min_index, seqindex);
             // If min_index is 0, the new sequence is placed at beginning
             if min_index == 0 {
                 neighbor_distances.insert(0, min_dist);
@@ -374,18 +375,38 @@ impl Alignment {
         // Now transform order such that if the order begins with [8, 3, 0], then the 8th
         // index is 0, 3th index is 1, 0th index is 2 etc.
         // That means we can sort the entries by looking up directly in the order
-        let mut ord: Vec<u32> = vec![0; self.nrows()];
+        let mut ord: Vec<u32> = vec![u32::MAX; self.nrows()];
         for (i, o) in order.iter().enumerate() {
+            // Check each element in order is unique
+            assert!(ord[*o] == u32::MAX);
             ord[*o] = i.try_into().unwrap()
         }
-
         ord
     }
 
     fn order(&mut self) {
+        // Sort by original index. This makes `compute_order` simpler, because
+        // we don't have to handle the case when observed and original index
+        // are different
+        // We sort in O(n) here
+        for i in 0..self.entries.len() {
+            let mut dst = self.entries[i].original_index;
+            while self.entries[i].original_index != i {
+                self.entries.swap(i, dst);
+                dst = self.entries[i].original_index;
+            }
+        }
+
         let order = self.order.get_or_init(|| self.compute_order());
-        self.entries
-            .sort_unstable_by(|a, b| order[a.original_index].cmp(&order[b.original_index]));
+
+        // Now sort by order in O(n)
+        for i in 0..self.entries.len() {
+            let mut dst = order[self.entries[i].original_index] as usize;
+            while order[self.entries[i].original_index] as usize != i {
+                self.entries.swap(i, dst);
+                dst = order[self.entries[i].original_index] as usize;
+            }
+        }
     }
 }
 
