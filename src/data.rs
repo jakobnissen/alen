@@ -430,8 +430,8 @@ pub struct View {
     pub colstart: usize,
     pub term_nrows: u16, // obtained from terminal
     pub term_ncols: u16,
-    pub namewidth: u16,  // number of graphemes of each name displayed
-    pub consensus: bool, // if consensus view is shown
+    pub namewidth: u16,   // number of graphemes of each name displayed
+    pub consensus: bool,  // if consensus view is shown
     pub translated: bool, // if showing translated protein view (DNA only)
     aln: Alignment,
 }

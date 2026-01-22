@@ -179,14 +179,18 @@ fn draw_ruler<T: Write>(io: &mut TerminalIO<T>, view: &View) -> Result<()> {
     // Make the bottom line with the ticks
     let tick_string = {
         let aln_range = view.colstart..=(view.colstart + view.seq_ncols_display() - 1);
-        let mut tick_string = if view.colstart % 10 == 0 {
+        let mut tick_string = if view.colstart.is_multiple_of(10) {
             "├"
         } else {
             "┌"
         }
         .to_owned();
         for alncol in aln_range {
-            tick_string.push(if (alncol + 1) % 10 == 0 { '┴' } else { '─' })
+            tick_string.push(if (alncol + 1).is_multiple_of(10) {
+                '┴'
+            } else {
+                '─'
+            })
         }
         tick_string
     };
@@ -311,7 +315,10 @@ fn draw_nonconsensus_sequences<T: Write>(io: &mut TerminalIO<T>, view: &View) ->
         let termrow = (i + HEADER_LINES) as u16;
         let (seq, is_aa): (&[u8], bool) = if view.translated {
             // Use translated protein sequences
-            (&view.translated_seq(alnrow).unwrap()[col_range.clone()], true)
+            (
+                &view.translated_seq(alnrow).unwrap()[col_range.clone()],
+                true,
+            )
         } else {
             (&view.seq(alnrow).unwrap()[col_range.clone()], view.is_aa())
         };
@@ -723,53 +730,52 @@ fn default_loop<T: Write>(io: &mut TerminalIO<T>, view: &mut View) -> Result<()>
                 };
 
                 // Toggle translation view (nucleotide only)
-                if kevent == KeyEvent::new(KeyCode::Char('t'), event::KeyModifiers::NONE)
-                    || kevent == KeyEvent::new(KeyCode::Char('T'), event::KeyModifiers::NONE)
+                if (kevent == KeyEvent::new(KeyCode::Char('t'), event::KeyModifiers::NONE)
+                    || kevent == KeyEvent::new(KeyCode::Char('T'), event::KeyModifiers::NONE))
+                    && view.can_translate()
                 {
-                    if view.can_translate() {
-                        // Show message if translation not yet computed
-                        if !view.translation_computed() {
-                            execute!(
-                                io.io,
-                                ResetColor,
-                                terminal::Clear(ClearType::All),
-                                cursor::MoveTo(0, 0),
-                                Print("Translating sequences..."),
-                            )?;
-                        }
+                    // Show message if translation not yet computed
+                    if !view.translation_computed() {
+                        execute!(
+                            io.io,
+                            ResetColor,
+                            terminal::Clear(ClearType::All),
+                            cursor::MoveTo(0, 0),
+                            Print("Translating sequences..."),
+                        )?;
+                    }
 
-                        // Check for translation errors
-                        if let Err(e) = view.translated_seqs() {
-                            // Display error and wait for keypress
-                            draw_default_mode_screen(io, view)?;
-                            draw_error_footer(io, view, &e.to_string())?;
-                            io.io.flush()?;
-                            event::read()?; // Wait for any key
-                            draw_default_footer(io, view)?;
-                            io.io.flush()?;
-                            continue;
-                        }
-
-                        // Toggle translation mode
-                        view.translated = !view.translated;
-
-                        // Adjust column position: 3 DNA bases = 1 amino acid
-                        if view.translated {
-                            view.colstart /= 3;
-                        } else {
-                            view.colstart *= 3;
-                        }
-
-                        // Turn off consensus display when switching modes (different alphabets)
-                        // Note: consensus caches are preserved for each mode
-                        if view.consensus {
-                            view.consensus = false;
-                            view.move_view(-1, 0);
-                        }
-
+                    // Check for translation errors
+                    if let Err(e) = view.translated_seqs() {
+                        // Display error and wait for keypress
                         draw_default_mode_screen(io, view)?;
+                        draw_error_footer(io, view, &e.to_string())?;
+                        io.io.flush()?;
+                        event::read()?; // Wait for any key
+                        draw_default_footer(io, view)?;
+                        io.io.flush()?;
                         continue;
                     }
+
+                    // Toggle translation mode
+                    view.translated = !view.translated;
+
+                    // Adjust column position: 3 DNA bases = 1 amino acid
+                    if view.translated {
+                        view.colstart /= 3;
+                    } else {
+                        view.colstart *= 3;
+                    }
+
+                    // Turn off consensus display when switching modes (different alphabets)
+                    // Note: consensus caches are preserved for each mode
+                    if view.consensus {
+                        view.consensus = false;
+                        view.move_view(-1, 0);
+                    }
+
+                    draw_default_mode_screen(io, view)?;
+                    continue;
                 };
             }
             Event::Resize(ncols, nrows) => {

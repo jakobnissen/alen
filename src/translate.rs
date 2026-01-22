@@ -64,7 +64,7 @@ pub fn translate_codon(codon: [u8; 3]) -> Result<u8, TranslationError> {
     // Check for gaps - must be all gaps or no gaps
     let gap_count = codon.iter().filter(|&&b| b == b'-').count();
     match gap_count {
-        0 => {} // No gaps, continue to translation
+        0 => {}               // No gaps, continue to translation
         3 => return Ok(b'-'), // All gaps
         _ => return Err(TranslationError::MixedGapCodon { position: 0 }), // Mixed gaps - error
     }
