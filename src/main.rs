@@ -93,9 +93,15 @@ fn draw_default_footer<T: Write>(io: &mut TerminalIO<T>, view: &View) -> Result<
     let base_footer = "q/Esc: Quit | [^⇧] + ←/→/↑/↓: Move | ./,: Adjust names | ^f: Find | ^j: Jump | ^s: Select | c: Consensus";
     let footer = if view.can_translate() {
         if view.translated {
-            format!("{} | t: Nucl view | r: Redraw", base_footer)
+            format!(
+                "{} | t: Nucl view | f: Frame {} | r: Redraw",
+                base_footer, view.frame
+            )
         } else {
-            format!("{} | t: Translate | r: Redraw", base_footer)
+            format!(
+                "{} | t: Translate | f: Frame {} | r: Redraw",
+                base_footer, view.frame
+            )
         }
     } else {
         format!("{} | r: Redraw", base_footer)
@@ -772,6 +778,46 @@ fn default_loop<T: Write>(io: &mut TerminalIO<T>, view: &mut View) -> Result<()>
                     if view.consensus {
                         view.consensus = false;
                         view.move_view(-1, 0);
+                    }
+
+                    draw_default_mode_screen(io, view)?;
+                    continue;
+                };
+
+                // Rotate reading frame (works in both nucleotide and translated mode)
+                if (kevent == KeyEvent::new(KeyCode::Char('f'), event::KeyModifiers::NONE)
+                    || kevent == KeyEvent::new(KeyCode::Char('F'), event::KeyModifiers::NONE))
+                    && view.can_translate()
+                {
+                    view.frame = (view.frame + 1) % 3;
+
+                    if view.translated {
+                        // Check if translation succeeds for the new frame
+                        if let Err(e) = view.translated_seqs() {
+                            let err_msg = e.to_string();
+                            // Revert to nucleotide view
+                            view.translated = false;
+                            view.colstart *= 3;
+                            if view.consensus {
+                                view.consensus = false;
+                                view.move_view(-1, 0);
+                            }
+                            draw_default_mode_screen(io, view)?;
+                            draw_error_footer(io, view, &err_msg)?;
+                            io.io.flush()?;
+
+                            // Pause screen at "press any input"
+                            event::read()?;
+                            draw_default_footer(io, view)?;
+                            io.io.flush()?;
+                            continue;
+                        }
+
+                        // Clamp column position to new bounds
+                        let max_col = view.ncols().saturating_sub(view.seq_ncols_display());
+                        if view.colstart > max_col {
+                            view.colstart = max_col;
+                        }
                     }
 
                     draw_default_mode_screen(io, view)?;

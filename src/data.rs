@@ -215,14 +215,14 @@ pub struct Alignment {
     longest_name: usize,
     // we calculate this lazily upon demand (for nucleotide view)
     consensus: OnceCell<Vec<Option<NonZeroU8>>>,
-    // consensus for translated protein view (separate cache)
-    translated_consensus: OnceCell<Vec<Option<NonZeroU8>>>,
+    // consensus for translated protein view (separate cache, one per reading frame)
+    translated_consensus: [OnceCell<Vec<Option<NonZeroU8>>>; 3],
     // When sorting entries by |ent| order[ent.original_index], the rows are ordered.
     // also calculate this lazily
     order: OnceCell<Vec<u32>>,
     is_aa: bool,
-    // Translated protein sequences (lazily computed, Result for error handling)
-    translated: OnceCell<Result<Vec<Vec<u8>>, TranslationError>>,
+    // Translated protein sequences (lazily computed, one per reading frame)
+    translated: [OnceCell<Result<Vec<Vec<u8>>, TranslationError>>; 3],
 }
 
 impl Alignment {
@@ -303,10 +303,10 @@ impl Alignment {
             entries,
             longest_name,
             consensus: OnceCell::new(),
-            translated_consensus: OnceCell::new(),
+            translated_consensus: [OnceCell::new(), OnceCell::new(), OnceCell::new()],
             order: OnceCell::new(),
             is_aa,
-            translated: OnceCell::new(),
+            translated: [OnceCell::new(), OnceCell::new(), OnceCell::new()],
         })
     }
 
@@ -443,6 +443,7 @@ pub struct View {
     pub namewidth: u16,   // number of graphemes of each name displayed
     pub consensus: bool,  // if consensus view is shown
     pub translated: bool, // if showing translated protein view (DNA only)
+    pub frame: u8,        // reading frame for translation (0, 1, or 2)
     aln: Alignment,
 }
 
@@ -457,6 +458,7 @@ impl View {
             namewidth: 0,
             consensus: false,
             translated: false,
+            frame: 0,
             aln,
         };
         // We need to resize before we resize names, because the latter
@@ -490,8 +492,7 @@ impl View {
     /// Computes lazily on first access for each mode.
     pub fn consensus(&self) -> &Vec<Option<NonZeroU8>> {
         if self.translated {
-            self.aln.translated_consensus.get_or_init(|| {
-                // Need to get translated sequences first
+            self.aln.translated_consensus[self.frame as usize].get_or_init(|| {
                 let seqs = self.translated_seqs().unwrap();
                 calculate_consensus(&mut seqs.iter(), seqs[0].len(), true)
             })
@@ -505,7 +506,9 @@ impl View {
     /// Check if consensus has been computed for current view mode
     pub fn consensus_computed(&self) -> bool {
         if self.translated {
-            self.aln.translated_consensus.get().is_some()
+            self.aln.translated_consensus[self.frame as usize]
+                .get()
+                .is_some()
         } else {
             self.aln.consensus.get().is_some()
         }
@@ -522,19 +525,19 @@ impl View {
 
     /// Check if translation has been computed
     pub fn translation_computed(&self) -> bool {
-        self.aln.translated.get().is_some()
+        self.aln.translated[self.frame as usize].get().is_some()
     }
 
     /// Get translated sequences (computed lazily).
     /// Returns Ok(&sequences) on success, Err(&error) if translation failed.
     pub fn translated_seqs(&self) -> Result<&Vec<Vec<u8>>, &TranslationError> {
-        self.aln
-            .translated
+        let frame = self.frame as usize;
+        self.aln.translated[frame]
             .get_or_init(|| {
                 self.aln
                     .entries
                     .iter()
-                    .map(|e| crate::translate::translate_sequence(&e.seq))
+                    .map(|e| crate::translate::translate_sequence(&e.seq[frame..], self.frame))
                     .collect::<Result<Vec<_>, _>>()
             })
             .as_ref()
@@ -601,7 +604,7 @@ impl View {
 
     pub fn ncols(&self) -> usize {
         if self.translated {
-            self.aln.ncols().div_ceil(3)
+            (self.aln.ncols() - self.frame as usize).div_ceil(3)
         } else {
             self.aln.ncols()
         }

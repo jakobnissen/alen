@@ -14,7 +14,7 @@ impl fmt::Display for TranslationError {
             TranslationError::MixedGapCodon { position } => {
                 write!(
                     f,
-                    "Mixed gap codon at position {} (gaps must align with codon boundaries)",
+                    "Mixed gap codon stating at position {} (gaps must align with codon boundaries)",
                     position + 1 // 1-indexed for display
                 )
             }
@@ -60,36 +60,36 @@ fn base_to_index(base: u8) -> Option<usize> {
 /// Translate a 3-base codon to an amino acid.
 /// Returns '-' if codon is all gaps, 'X' for ambiguous/unknown bases.
 /// Returns error if codon has mixed gaps (some gaps, some non-gaps).
-pub fn translate_codon(codon: [u8; 3]) -> Result<u8, TranslationError> {
+pub fn translate_codon(codon: [u8; 3]) -> Option<u8> {
     // Check for gaps - must be all gaps or no gaps
     let gap_count = codon.iter().filter(|&&b| b == b'-').count();
     match gap_count {
-        0 => {}               // No gaps, continue to translation
-        3 => return Ok(b'-'), // All gaps
-        _ => return Err(TranslationError::MixedGapCodon { position: 0 }), // Mixed gaps - error
+        0 => {}                 // No gaps, continue to translation
+        3 => return Some(b'-'), // All gaps
+        _ => return None,       // Mixed gaps - error
     }
 
     let b1 = match base_to_index(codon[0]) {
         Some(i) => i,
-        None => return Ok(b'X'),
+        None => return Some(b'X'),
     };
     let b2 = match base_to_index(codon[1]) {
         Some(i) => i,
-        None => return Ok(b'X'),
+        None => return Some(b'X'),
     };
     let b3 = match base_to_index(codon[2]) {
         Some(i) => i,
-        None => return Ok(b'X'),
+        None => return Some(b'X'),
     };
 
-    Ok(CODON_TABLE[b1 * 16 + b2 * 4 + b3])
+    Some(CODON_TABLE[b1 * 16 + b2 * 4 + b3])
 }
 
 /// Translate a DNA sequence to protein.
 /// Assumes sequence is in-frame (starts at codon position 0).
 /// Partial codons at the end are translated to 'X'.
 /// Returns error if any codon contains mixed gaps.
-pub fn translate_sequence(seq: &[u8]) -> Result<Vec<u8>, TranslationError> {
+pub fn translate_sequence(seq: &[u8], frame: u8) -> Result<Vec<u8>, TranslationError> {
     let protein_len = seq.len().div_ceil(3);
     let mut protein = Vec::with_capacity(protein_len);
 
@@ -97,11 +97,13 @@ pub fn translate_sequence(seq: &[u8]) -> Result<Vec<u8>, TranslationError> {
     for (i, chunk) in seq.chunks(3).enumerate() {
         if chunk.len() == 3 {
             let codon: [u8; 3] = chunk.try_into().unwrap();
-            protein.push(translate_codon(codon).map_err(|e| match e {
-                TranslationError::MixedGapCodon { .. } => {
-                    TranslationError::MixedGapCodon { position: i * 3 }
-                }
-            })?);
+            if let Some(amino_acid) = translate_codon(codon) {
+                protein.push(amino_acid);
+            } else {
+                return Err(TranslationError::MixedGapCodon {
+                    position: i * 3 + frame as usize,
+                });
+            }
         } else {
             // Partial codon at end -> X
             protein.push(b'X');
@@ -143,28 +145,28 @@ mod tests {
     #[test]
     fn test_translate_codon_mixed_gaps() {
         // Mixed gaps should return error
-        assert!(translate_codon(*b"A-G").is_err());
-        assert!(translate_codon(*b"AT-").is_err());
-        assert!(translate_codon(*b"-TG").is_err());
-        assert!(translate_codon(*b"--G").is_err());
-        assert!(translate_codon(*b"A--").is_err());
+        assert!(translate_codon(*b"A-G").is_none());
+        assert!(translate_codon(*b"AT-").is_none());
+        assert!(translate_codon(*b"-TG").is_none());
+        assert!(translate_codon(*b"--G").is_none());
+        assert!(translate_codon(*b"A--").is_none());
     }
 
     #[test]
     fn test_translate_sequence() {
-        assert_eq!(translate_sequence(b"ATGTTT").unwrap(), b"MF");
-        assert_eq!(translate_sequence(b"ATGTTTGGG").unwrap(), b"MFG");
+        assert_eq!(translate_sequence(b"ATGTTT", 0).unwrap(), b"MF");
+        assert_eq!(translate_sequence(b"ATGTTTGGG", 0).unwrap(), b"MFG");
         // Partial codon at end produces X
-        assert_eq!(translate_sequence(b"ATGTTTT").unwrap(), b"MFX");
-        assert_eq!(translate_sequence(b"ATGTTTTT").unwrap(), b"MFX");
+        assert_eq!(translate_sequence(b"ATGTTTT", 0).unwrap(), b"MFX");
+        assert_eq!(translate_sequence(b"ATGTTTTT", 0).unwrap(), b"MFX");
         // All-gap codons work
-        assert_eq!(translate_sequence(b"ATG---TTT").unwrap(), b"M-F");
+        assert_eq!(translate_sequence(b"ATG---TTT", 0).unwrap(), b"M-F");
     }
 
     #[test]
     fn test_translate_sequence_mixed_gaps() {
         // Mixed gaps in sequence should return error with correct position
-        let result = translate_sequence(b"ATGA-GTTT");
+        let result = translate_sequence(b"ATGA-GTTT", 0);
         assert!(result.is_err());
         if let Err(TranslationError::MixedGapCodon { position }) = result {
             assert_eq!(position, 3); // Error at codon starting at position 3
