@@ -14,7 +14,7 @@ impl fmt::Display for TranslationError {
             TranslationError::MixedGapCodon { position } => {
                 write!(
                     f,
-                    "Mixed gap codon stating at position {} (gaps must align with codon boundaries)",
+                    "Mixed gap codon starting at position {} (gaps must align with codon boundaries)",
                     position + 1 // 1-indexed for display
                 )
             }

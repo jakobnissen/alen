@@ -179,7 +179,8 @@ fn draw_ruler<T: Write>(io: &mut TerminalIO<T>, view: &View) -> Result<()> {
             string.push_str(&" ".repeat(10 - add.len()));
         }
         let start_index = view.colstart - start;
-        string[start_index..=(start_index + view.seq_ncols_display())].to_owned()
+        string[start_index..=(start_index + view.seq_ncols_display()).min(string.len() - 1)]
+            .to_owned()
     };
 
     // Make the bottom line with the ticks
@@ -505,7 +506,7 @@ fn draw_highlight<T: Write>(
             text[0..max_len - 1].to_owned()
         } else {
             let lastindex = if let Some((index, _)) =
-                UnicodeSegmentation::grapheme_indices(text, true).nth(max_len - 1)
+                UnicodeSegmentation::grapheme_indices(text, true).nth(max_len)
             {
                 index - 1
             } else {
@@ -767,10 +768,11 @@ fn default_loop<T: Write>(io: &mut TerminalIO<T>, view: &mut View) -> Result<()>
                     view.translated = !view.translated;
 
                     // Adjust column position: 3 DNA bases = 1 amino acid
+
                     if view.translated {
-                        view.colstart /= 3;
+                        view.colstart = (view.colstart / 3).min(view.last_colstart());
                     } else {
-                        view.colstart *= 3;
+                        view.colstart = (view.colstart * 3).min(view.last_colstart());
                     }
 
                     // Turn off consensus display when switching modes (different alphabets)

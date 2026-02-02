@@ -615,6 +615,11 @@ impl View {
             .saturating_sub(HEADER_LINES + FOOTER_LINES + self.consensus as usize)
     }
 
+    // Last valid self.colstart value
+    pub fn last_colstart(&self) -> usize {
+        self.ncols().saturating_sub(self.seq_ncols_display())
+    }
+
     /// Index of last seq row
     fn last_seq_row(&self) -> Option<usize> {
         match self.seq_nrows_display() {
