@@ -2,11 +2,38 @@ use std::num::NonZeroU8;
 
 pub const PRINTABLE_ASCII_OFFSET: u8 = b'!';
 pub const PRINTABLE_ASCII_LEN: usize = (b'~' - b'!' + 1) as usize;
+pub const AMINO_ACID_UNAMBIGUOUS_RESIDUES: &[u8] = b"ACDEFGHIKLMNPQRSTVWY";
+pub const NUCLEOTIDE_UNAMBIGUOUS_RESIDUES: &[u8] = b"ACGT";
+pub const AMINO_ACID_ALPHABET_SIZE: usize = AMINO_ACID_UNAMBIGUOUS_RESIDUES.len();
+pub const NUCLEOTIDE_ALPHABET_SIZE: usize = NUCLEOTIDE_UNAMBIGUOUS_RESIDUES.len();
+
+#[derive(Clone, Copy)]
+pub enum Alphabet {
+    AminoAcid,
+    Nucleotide,
+}
+
+impl Alphabet {
+    pub const fn size(self) -> usize {
+        match self {
+            Self::AminoAcid => AMINO_ACID_ALPHABET_SIZE,
+            Self::Nucleotide => NUCLEOTIDE_ALPHABET_SIZE,
+        }
+    }
+
+    pub const fn ambiguous_bytes(self) -> &'static [u8] {
+        match self {
+            Self::AminoAcid => b"BJOUXZ",
+            Self::Nucleotide => b"MRSVWYHKDBN",
+        }
+    }
+}
 
 const AMINO_ACID_DETECTION_LUT: [bool; 256] = build_bool_lut(b"*EFIJLOPQXZ");
-const AMINO_ACID_INDEX_LUT: [Option<NonZeroU8>; 256] = build_index_lut(b"ACDEFGHIKLMNPQRSTVWY");
+const AMINO_ACID_INDEX_LUT: [Option<NonZeroU8>; 256] =
+    build_index_lut(AMINO_ACID_UNAMBIGUOUS_RESIDUES);
 const NUCLEOTIDE_INDEX_LUT: [Option<NonZeroU8>; 256] = {
-    let mut lut = build_index_lut(b"ACGT");
+    let mut lut = build_index_lut(NUCLEOTIDE_UNAMBIGUOUS_RESIDUES);
     // Include 'U' for RNA sequences, mapping it to the same index as 'T'.
     set_index(&mut lut, b'U', 3);
     lut
@@ -75,14 +102,6 @@ pub fn nucleotide_index(byte: u8) -> Option<usize> {
     lookup_index(&NUCLEOTIDE_INDEX_LUT, byte)
 }
 
-fn amino_acid_index(byte: u8) -> Option<usize> {
+pub fn amino_acid_index(byte: u8) -> Option<usize> {
     lookup_index(&AMINO_ACID_INDEX_LUT, byte)
-}
-
-pub fn residue_index(byte: u8, is_aa: bool) -> Option<usize> {
-    if is_aa {
-        amino_acid_index(byte)
-    } else {
-        nucleotide_index(byte)
-    }
 }

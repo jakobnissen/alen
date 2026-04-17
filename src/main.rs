@@ -11,6 +11,7 @@ mod constants;
 mod data;
 mod translate;
 
+use alphabet::Alphabet;
 use data::{Graphemes, View};
 
 use std::cmp::min;
@@ -105,8 +106,12 @@ fn update_top_row_state(view: &mut View, update: impl FnOnce(&mut View)) {
     view.clamp_rowstart();
 }
 
-fn display_is_aa(view: &View) -> bool {
-    view.translated || view.is_aa()
+fn display_alphabet(view: &View) -> Alphabet {
+    if view.translated {
+        Alphabet::AminoAcid
+    } else {
+        view.alphabet()
+    }
 }
 
 fn displayed_seq(view: &View, row: usize) -> Option<&[u8]> {
@@ -125,6 +130,13 @@ fn conservation_bar_symbol(value: f64, max_value: f64) -> char {
     let max_level = (CONSERVATION_BARS.len() - 1) as f64;
     let level = (normalized * max_level).floor() as usize;
     CONSERVATION_BARS[level]
+}
+
+fn get_color_background(byte: u8, alphabet: Alphabet) -> Option<Color> {
+    match alphabet {
+        Alphabet::AminoAcid => get_color_background_aa(byte),
+        Alphabet::Nucleotide => get_color_background_dna(byte),
+    }
 }
 
 // ================================= Footers =================================
@@ -397,7 +409,7 @@ fn draw_conservation_row<T: Write>(io: &mut TerminalIO<T>, view: &View) -> Resul
         None => return Ok(()),
     };
 
-    let max_conservation = conservation::max_conservation(display_is_aa(view));
+    let max_conservation = conservation::max_conservation(display_alphabet(view));
     let conservation = match view.conservation_if_computed() {
         Some(profile) => profile,
         None => return Ok(()),
@@ -423,11 +435,11 @@ fn draw_nonconsensus_sequences<T: Write>(io: &mut TerminalIO<T>, view: &View) ->
         None => return Ok(()),
     };
 
-    let is_aa = display_is_aa(view);
+    let alphabet = display_alphabet(view);
     for (i, alnrow) in row_range.enumerate() {
         let termrow = (i + view.sequence_row_offset()) as u16;
         let seq = &displayed_seq(view, alnrow).unwrap()[col_range.clone()];
-        draw_sequence(io, view.namewidth + 1, is_aa, seq, termrow)?;
+        draw_sequence(io, view.namewidth + 1, alphabet, seq, termrow)?;
     }
     Ok(())
 }
@@ -435,17 +447,13 @@ fn draw_nonconsensus_sequences<T: Write>(io: &mut TerminalIO<T>, view: &View) ->
 fn draw_sequence<T: Write>(
     io: &mut TerminalIO<T>,
     colstart: u16,
-    is_aa: bool,
+    alphabet: Alphabet,
     seq: &[u8],
     termrow: u16,
 ) -> Result<()> {
     queue!(io.io, cursor::MoveTo(colstart, termrow))?;
     for byte in seq {
-        let color = if is_aa {
-            get_color_background_aa(*byte)
-        } else {
-            get_color_background_dna(*byte)
-        };
+        let color = get_color_background(*byte, alphabet);
         set_terminal_color(io, color)?;
         queue!(io.io, Print(*byte as char))?;
     }
@@ -462,20 +470,19 @@ fn draw_consensus_sequences<T: Write>(io: &mut TerminalIO<T>, view: &View) -> Re
         None => return Ok(()),
     };
 
-    // Determine if we're in amino acid mode (either native AA or translated DNA)
-    let is_aa = display_is_aa(view);
+    let alphabet = display_alphabet(view);
 
     // First draw top row
     let cons = view.consensus();
     let cons_seq = &cons[col_range.clone()];
-    draw_top_consensus(io, view.namewidth + 1, consensus_row, is_aa, cons_seq)?;
+    draw_top_consensus(io, view.namewidth + 1, consensus_row, alphabet, cons_seq)?;
 
     // Then draw rest, if applicable
     if let Some(alnrows) = view.seq_row_range() {
         for (i, alnrow) in alnrows.enumerate() {
             let termrow = (i + view.sequence_row_offset()) as u16;
             let seq = &displayed_seq(view, alnrow).unwrap()[col_range.clone()];
-            draw_consensus_other_seq(io, view.namewidth + 1, termrow, is_aa, seq, cons_seq)?
+            draw_consensus_other_seq(io, view.namewidth + 1, termrow, alphabet, seq, cons_seq)?
         }
     }
     Ok(())
@@ -485,17 +492,13 @@ fn draw_top_consensus<T: Write>(
     io: &mut TerminalIO<T>,
     colstart: u16,
     termrow: u16,
-    is_aa: bool,
+    alphabet: Alphabet,
     seq: &[Option<NonZeroU8>],
 ) -> Result<()> {
     queue!(io.io, cursor::MoveTo(colstart, termrow),)?;
     for maybe_base in seq {
         let (background_color, symbol) = if let Some(byte) = maybe_base {
-            let bc = if is_aa {
-                get_color_background_aa(byte.get())
-            } else {
-                get_color_background_dna(byte.get())
-            };
+            let bc = get_color_background(byte.get(), alphabet);
             (bc, byte.get() as char)
         } else {
             (None, ' ')
@@ -510,7 +513,7 @@ fn draw_consensus_other_seq<T: Write>(
     io: &mut TerminalIO<T>,
     colstart: u16,
     termrow: u16,
-    is_aa: bool,
+    alphabet: Alphabet,
     seq: &[u8],
     cons: &[Option<NonZeroU8>],
 ) -> Result<()> {
@@ -521,11 +524,7 @@ fn draw_consensus_other_seq<T: Write>(
         {
             (None, ' ')
         } else {
-            let color = if is_aa {
-                get_color_background_aa(*byte)
-            } else {
-                get_color_background_dna(*byte)
-            };
+            let color = get_color_background(*byte, alphabet);
             (color, *byte as char)
         };
         set_terminal_color(io, color)?;

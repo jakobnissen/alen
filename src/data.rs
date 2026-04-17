@@ -1,4 +1,4 @@
-use crate::alphabet;
+use crate::alphabet::{self, Alphabet};
 use crate::conservation;
 use crate::constants::{FOOTER_LINES, HEADER_LINES};
 use crate::translate::TranslationError;
@@ -86,8 +86,7 @@ impl Graphemes {
     }
 }
 
-// Returns whether it's an AA alphabet, else it default to DNA.
-fn verify_alphabet(entries: &[Entry], must_aa: bool) -> Result<bool> {
+fn verify_alphabet(entries: &[Entry], must_aa: bool) -> Result<Alphabet> {
     let mut must_be_aa = must_aa;
     for entry in entries.iter() {
         for &byte in entry.seq.iter() {
@@ -101,18 +100,22 @@ fn verify_alphabet(entries: &[Entry], must_aa: bool) -> Result<bool> {
             must_be_aa |= alphabet::indicates_amino_acid(byte);
         }
     }
-    Ok(must_be_aa)
+    Ok(if must_be_aa {
+        Alphabet::AminoAcid
+    } else {
+        Alphabet::Nucleotide
+    })
 }
 
 fn calculate_consensus<'a>(
     seqs: impl IntoIterator<Item = &'a [u8]>,
     ncols: usize,
-    is_aa: bool,
+    seq_alphabet: Alphabet,
 ) -> Vec<Option<NonZeroU8>> {
     let offset = alphabet::PRINTABLE_ASCII_OFFSET;
     let nonzero_offset = NonZeroU8::new(offset).unwrap();
     let mut counts = vec![[0u32; alphabet::PRINTABLE_ASCII_LEN]; ncols];
-    let ambiguous_bytes: &[u8] = if is_aa { b"BJOUXZ" } else { b"MRSVWYHKDBN" };
+    let ambiguous_bytes = seq_alphabet.ambiguous_bytes();
 
     for seq in seqs {
         for (&byte, arr) in seq.iter().zip(counts.iter_mut()) {
@@ -189,7 +192,7 @@ pub struct Alignment {
     // When sorting entries by |ent| order[ent.original_index], the rows are ordered.
     // also calculate this lazily
     order: OnceCell<Vec<u32>>,
-    is_aa: bool,
+    alphabet: Alphabet,
     // Translated protein sequences (lazily computed, one per reading frame)
     translated: [OnceCell<Result<Vec<Vec<u8>>, TranslationError>>; 3],
 }
@@ -265,7 +268,7 @@ impl Alignment {
         }
 
         // Verify alphabet
-        let is_aa = verify_alphabet(&entries, must_aa)?;
+        let alphabet = verify_alphabet(&entries, must_aa)?;
 
         let longest_name = entries.iter().map(|v| v.graphemes.len()).max().unwrap();
         Ok(Alignment {
@@ -276,7 +279,7 @@ impl Alignment {
             translated_consensus: [OnceCell::new(), OnceCell::new(), OnceCell::new()],
             translated_conservation: [OnceCell::new(), OnceCell::new(), OnceCell::new()],
             order: OnceCell::new(),
-            is_aa,
+            alphabet,
             translated: [OnceCell::new(), OnceCell::new(), OnceCell::new()],
         })
     }
@@ -467,12 +470,16 @@ impl View {
         if self.translated {
             self.aln.translated_consensus[self.frame as usize].get_or_init(|| {
                 let seqs = self.translated_seqs().unwrap();
-                calculate_consensus(seqs.iter().map(Vec::as_slice), seqs[0].len(), true)
+                calculate_consensus(
+                    seqs.iter().map(Vec::as_slice),
+                    seqs[0].len(),
+                    Alphabet::AminoAcid,
+                )
             })
         } else {
-            self.aln
-                .consensus
-                .get_or_init(|| calculate_consensus(self.seqs(), self.aln.ncols(), self.aln.is_aa))
+            self.aln.consensus.get_or_init(|| {
+                calculate_consensus(self.seqs(), self.aln.ncols(), self.aln.alphabet)
+            })
         }
     }
 
@@ -498,7 +505,7 @@ impl View {
                 conservation::compute_conservation_profile(
                     seqs.iter().map(Vec::as_slice),
                     seqs[0].len(),
-                    true,
+                    Alphabet::AminoAcid,
                 )
             })
         } else {
@@ -506,7 +513,7 @@ impl View {
                 conservation::compute_conservation_profile(
                     self.seqs(),
                     self.aln.ncols(),
-                    self.aln.is_aa,
+                    self.aln.alphabet,
                 )
             })
         }
@@ -533,13 +540,16 @@ impl View {
         }
     }
 
-    pub fn is_aa(&self) -> bool {
-        self.aln.is_aa
+    pub fn alphabet(&self) -> Alphabet {
+        self.aln.alphabet
     }
 
     /// Check if source is nucleotide (translation only valid for DNA / RNA)
     pub fn can_translate(&self) -> bool {
-        !self.aln.is_aa
+        match self.aln.alphabet {
+            Alphabet::AminoAcid => false,
+            Alphabet::Nucleotide => true,
+        }
     }
 
     /// Check if translation has been computed
@@ -729,6 +739,7 @@ impl View {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::alphabet::Alphabet;
 
     fn consensus_bytes(consensus: &[Option<NonZeroU8>]) -> Vec<Option<u8>> {
         consensus
@@ -755,28 +766,28 @@ mod tests {
         let gap_consensus = calculate_consensus(
             [b"A".as_slice(), b"-".as_slice(), b"-".as_slice()],
             1,
-            false,
+            Alphabet::Nucleotide,
         );
         assert_eq!(consensus_bytes(&gap_consensus), vec![Some(b'-')]);
 
         let dot_consensus = calculate_consensus(
             [b"A".as_slice(), b".".as_slice(), b".".as_slice()],
             1,
-            false,
+            Alphabet::Nucleotide,
         );
         assert_eq!(consensus_bytes(&dot_consensus), vec![Some(b'.')]);
 
         let nucleotide_consensus = calculate_consensus(
             [b"a".as_slice(), b"A".as_slice(), b"N".as_slice()],
             1,
-            false,
+            Alphabet::Nucleotide,
         );
         assert_eq!(consensus_bytes(&nucleotide_consensus), vec![Some(b'A')]);
 
         let amino_acid_consensus = calculate_consensus(
             [b"ME".as_slice(), b"ME".as_slice(), b"MM".as_slice()],
             2,
-            true,
+            Alphabet::AminoAcid,
         );
         assert_eq!(
             consensus_bytes(&amino_acid_consensus),
