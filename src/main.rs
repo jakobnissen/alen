@@ -31,7 +31,9 @@ use crossterm::{
     cursor,
     event::{self, Event, KeyCode, KeyEvent},
     execute, queue,
-    style::{Color, Print, ResetColor, SetBackgroundColor, SetForegroundColor},
+    style::{
+        Attribute, Color, Print, ResetColor, SetAttribute, SetBackgroundColor, SetForegroundColor,
+    },
     terminal::{self, ClearType},
 };
 
@@ -279,13 +281,31 @@ fn draw_ruler<T: Write>(io: &mut TerminalIO<T>, view: &View) -> Result<()> {
 
 // ================================= Names =================================
 
+fn format_name_parts(namewidth: u16, graphemes: &Graphemes) -> (String, String) {
+    if namewidth == 0 {
+        return (String::new(), "│".to_owned());
+    }
+
+    let elide = graphemes.len() > namewidth as usize;
+    let label_len = min(graphemes.len(), namewidth as usize - elide as usize);
+    let mut label = graphemes.get_n_graphemes(label_len).unwrap().to_owned();
+    let suffix = if elide {
+        label.push('…');
+        "│".to_owned()
+    } else {
+        let missing_graphemes = namewidth as usize - graphemes.len();
+        format!("{}│", " ".repeat(missing_graphemes))
+    };
+    (label, suffix)
+}
+
 fn draw_names<T: Write>(io: &mut TerminalIO<T>, view: &View) -> Result<()> {
     set_terminal_color(io, None)?;
     if let Some(termrow) = view.conservation_row() {
-        draw_name(io, view.namewidth, &Graphemes::new("conservation"), termrow)?;
+        draw_overlay_name(io, view.namewidth, &Graphemes::new("conservation"), termrow)?;
     }
     if let Some(termrow) = view.consensus_row() {
-        draw_name(io, view.namewidth, &Graphemes::new("consensus"), termrow)?;
+        draw_overlay_name(io, view.namewidth, &Graphemes::new("consensus"), termrow)?;
     }
     if let Some(range) = view.seq_row_range() {
         for (i, nameindex) in range.into_iter().enumerate() {
@@ -307,22 +327,35 @@ fn draw_name<T: Write>(
     graphemes: &Graphemes,
     termrow: u16,
 ) -> Result<()> {
-    let name = if namewidth == 0 {
-        "│".to_owned()
+    let (label, suffix) = format_name_parts(namewidth, graphemes);
+    queue!(
+        io.io,
+        cursor::MoveTo(0, termrow),
+        Print(label),
+        Print(suffix),
+    )?;
+    Ok(())
+}
+
+fn draw_overlay_name<T: Write>(
+    io: &mut TerminalIO<T>,
+    namewidth: u16,
+    graphemes: &Graphemes,
+    termrow: u16,
+) -> Result<()> {
+    let (label, suffix) = format_name_parts(namewidth, graphemes);
+    queue!(io.io, cursor::MoveTo(0, termrow))?;
+    if io.has_color && !label.is_empty() {
+        queue!(
+            io.io,
+            SetAttribute(Attribute::Italic),
+            Print(label),
+            SetAttribute(Attribute::NoItalic),
+            Print(suffix),
+        )?;
     } else {
-        let elide = graphemes.len() > namewidth as usize;
-        let namelen = min(graphemes.len(), namewidth as usize - elide as usize);
-        let mut name = graphemes.get_n_graphemes(namelen).unwrap().to_owned();
-        if elide {
-            name.push('…')
-        } else {
-            let missing_graphemes = namewidth as usize - graphemes.len();
-            name.push_str(&" ".repeat(missing_graphemes));
-        }
-        name.push('│');
-        name
-    };
-    queue!(io.io, cursor::MoveTo(0, termrow), Print(name),)?;
+        queue!(io.io, Print(label), Print(suffix),)?;
+    }
     Ok(())
 }
 
