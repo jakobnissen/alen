@@ -91,7 +91,7 @@ fn verify_alphabet(entries: &[Entry], must_aa: bool) -> Result<bool> {
     let mut must_be_aa = must_aa;
     for entry in entries.iter() {
         for &byte in entry.seq.iter() {
-            if !alphabet::is_printable_ascii(byte) {
+            if !byte.is_ascii_graphic() {
                 return Err(anyhow!(
                     "Sequence named \"{}\" contains non-ASCII-printable byte 0x{:x}",
                     entry.graphemes.string,
