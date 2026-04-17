@@ -1,3 +1,4 @@
+use crate::alphabet::nucleotide_index;
 use std::fmt;
 
 /// Error type for translation failures
@@ -46,17 +47,6 @@ const CODON_TABLE: [u8; 64] = [
     b'L', b'F', b'L', b'F', // TTA, TTC, TTG, TTT
 ];
 
-fn base_to_index(base: u8) -> Option<usize> {
-    match base | 0x20 {
-        // lowercase conversion
-        b'a' => Some(0),
-        b'c' => Some(1),
-        b'g' => Some(2),
-        b't' | b'u' => Some(3),
-        _ => None,
-    }
-}
-
 /// Translate a 3-base codon to an amino acid.
 /// Returns '-' if codon is all gaps, 'X' for ambiguous/unknown bases.
 /// Returns error if codon has mixed gaps (some gaps, some non-gaps).
@@ -69,15 +59,15 @@ pub fn translate_codon(codon: [u8; 3]) -> Option<u8> {
         _ => return None,       // Mixed gaps - error
     }
 
-    let b1 = match base_to_index(codon[0]) {
+    let b1 = match nucleotide_index(codon[0]) {
         Some(i) => i,
         None => return Some(b'X'),
     };
-    let b2 = match base_to_index(codon[1]) {
+    let b2 = match nucleotide_index(codon[1]) {
         Some(i) => i,
         None => return Some(b'X'),
     };
-    let b3 = match base_to_index(codon[2]) {
+    let b3 = match nucleotide_index(codon[2]) {
         Some(i) => i,
         None => return Some(b'X'),
     };

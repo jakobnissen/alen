@@ -5,11 +5,12 @@
 
 // Optimize ordering, or allow to exit. It can be quite slow, I think.
 
+mod alphabet;
+mod conservation;
 mod constants;
 mod data;
 mod translate;
 
-use constants::HEADER_LINES;
 use data::{Graphemes, View};
 
 use std::cmp::min;
@@ -59,6 +60,75 @@ fn set_terminal_color<T: Write>(io: &mut TerminalIO<T>, color: Option<Color>) ->
     Ok(())
 }
 
+// ============================ Conservation ============================
+
+const CONSERVATION_BARS: [char; 9] = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+
+fn show_progress_message<T: Write>(io: &mut TerminalIO<T>, message: &str) -> Result<()> {
+    execute!(
+        io.io,
+        ResetColor,
+        terminal::Clear(ClearType::All),
+        cursor::MoveTo(0, 0),
+        Print(message),
+    )?;
+    Ok(())
+}
+
+fn ensure_consensus_ready<T: Write>(io: &mut TerminalIO<T>, view: &View) -> Result<()> {
+    if !view.consensus_computed() {
+        show_progress_message(io, "Calculating consensus...")?;
+        let _ = view.consensus();
+    }
+    Ok(())
+}
+
+fn ensure_visible_conservation_ready<T: Write>(io: &mut TerminalIO<T>, view: &View) -> Result<()> {
+    if view.term_ncols < 2
+        || view.term_nrows < 4
+        || view.conservation_row().is_none()
+        || view.seq_col_range().is_none()
+        || view.conservation_computed()
+    {
+        return Ok(());
+    }
+
+    show_progress_message(io, "Calculating conservation...")?;
+    let _ = view.conservation();
+    Ok(())
+}
+
+fn update_top_row_state(view: &mut View, update: impl FnOnce(&mut View)) {
+    let old_rows = view.extra_top_rows() as isize;
+    update(view);
+    let new_rows = view.extra_top_rows() as isize;
+    if new_rows != old_rows {
+        view.move_view(new_rows - old_rows, 0);
+    }
+}
+
+fn display_is_aa(view: &View) -> bool {
+    view.translated || view.is_aa()
+}
+
+fn displayed_seq(view: &View, row: usize) -> Option<&[u8]> {
+    if view.translated {
+        view.translated_seq(row)
+    } else {
+        view.seq(row)
+    }
+}
+
+fn conservation_bar_symbol(value: f64, max_value: f64) -> char {
+    if !value.is_finite() || max_value <= 0.0 {
+        return CONSERVATION_BARS[0];
+    }
+    let normalized = (value / max_value).clamp(0.0, 1.0);
+    let max_level = (CONSERVATION_BARS.len() - 1) as f64;
+    let level = (normalized * max_level).floor() as usize;
+    CONSERVATION_BARS[level]
+}
+
 // ================================= Footers =================================
 fn draw_footer_text<T: Write>(
     io: &mut TerminalIO<T>,
@@ -90,7 +160,7 @@ fn draw_footer_text<T: Write>(
 }
 
 fn draw_default_footer<T: Write>(io: &mut TerminalIO<T>, view: &View) -> Result<()> {
-    let base_footer = "q/Esc: Quit | [^⇧] + ←/→/↑/↓: Move | ./,: Adjust names | ^f: Find | ^j: Jump | ^s: Select | c: Consensus";
+    let base_footer = "q/Esc: Quit | [^⇧] + ←/→/↑/↓: Move | ./,: Adjust names | ^f: Find | ^j: Jump | ^s: Select | c: Consensus | i: Conservation";
     let footer = if view.can_translate() {
         if view.translated {
             format!(
@@ -215,41 +285,15 @@ fn draw_ruler<T: Write>(io: &mut TerminalIO<T>, view: &View) -> Result<()> {
 
 fn draw_names<T: Write>(io: &mut TerminalIO<T>, view: &View) -> Result<()> {
     set_terminal_color(io, None)?;
-    if view.consensus {
-        draw_consensus_names(io, view)?;
-    } else {
-        draw_nonconsensus_names(io, view)?;
+    if let Some(termrow) = view.conservation_row() {
+        draw_name(io, view.namewidth, &Graphemes::new("conservation"), termrow)?;
     }
-    Ok(())
-}
-
-fn draw_nonconsensus_names<T: Write>(io: &mut TerminalIO<T>, view: &View) -> Result<()> {
+    if let Some(termrow) = view.consensus_row() {
+        draw_name(io, view.namewidth, &Graphemes::new("consensus"), termrow)?;
+    }
     if let Some(range) = view.seq_row_range() {
         for (i, nameindex) in range.into_iter().enumerate() {
-            let termrow = (i + HEADER_LINES) as u16;
-            draw_name(
-                io,
-                view.namewidth,
-                view.grapheme(nameindex).unwrap(),
-                termrow,
-            )?;
-        }
-    }
-    Ok(())
-}
-
-fn draw_consensus_names<T: Write>(io: &mut TerminalIO<T>, view: &View) -> Result<()> {
-    if view.term_nrows > HEADER_LINES as u16 {
-        draw_name(
-            io,
-            view.namewidth,
-            &Graphemes::new("consensus"),
-            HEADER_LINES as u16,
-        )?;
-    }
-    if let Some(range) = view.seq_row_range() {
-        for (i, nameindex) in range.enumerate() {
-            let termrow = (i + 1 + HEADER_LINES) as u16;
+            let termrow = (i + view.sequence_row_offset()) as u16;
             draw_name(
                 io,
                 view.namewidth,
@@ -297,13 +341,45 @@ fn highlight_name<T: Write>(io: &mut TerminalIO<T>, view: &mut View, nrow: usize
     )
 }
 
-// ================================= Names =================================
+// =============================== Sequences ===============================
 
 fn draw_sequences<T: Write>(io: &mut TerminalIO<T>, view: &View) -> Result<()> {
-    if view.consensus {
+    let conservation_visible = view.conservation_row().is_some();
+    let consensus_visible = view.consensus_row().is_some();
+
+    if conservation_visible {
+        draw_conservation_row(io, view)?;
+    }
+    if consensus_visible {
         draw_consensus_sequences(io, view)?;
     } else {
         draw_nonconsensus_sequences(io, view)?;
+    }
+    Ok(())
+}
+
+fn draw_conservation_row<T: Write>(io: &mut TerminalIO<T>, view: &View) -> Result<()> {
+    let termrow = match view.conservation_row() {
+        Some(row) => row,
+        None => return Ok(()),
+    };
+    let col_range = match view.seq_col_range() {
+        Some(range) => range,
+        None => return Ok(()),
+    };
+
+    let max_conservation = conservation::max_conservation(display_is_aa(view));
+    let conservation = match view.conservation_if_computed() {
+        Some(profile) => profile,
+        None => return Ok(()),
+    };
+    set_terminal_color(io, None)?;
+    queue!(io.io, cursor::MoveTo(view.namewidth + 1, termrow))?;
+    for value in &conservation[col_range] {
+        queue!(
+            io.io,
+            Print(conservation_bar_symbol(*value, max_conservation))
+        )?;
     }
     Ok(())
 }
@@ -318,17 +394,10 @@ fn draw_nonconsensus_sequences<T: Write>(io: &mut TerminalIO<T>, view: &View) ->
         None => return Ok(()),
     };
 
+    let is_aa = display_is_aa(view);
     for (i, alnrow) in row_range.enumerate() {
-        let termrow = (i + HEADER_LINES) as u16;
-        let (seq, is_aa): (&[u8], bool) = if view.translated {
-            // Use translated protein sequences
-            (
-                &view.translated_seq(alnrow).unwrap()[col_range.clone()],
-                true,
-            )
-        } else {
-            (&view.seq(alnrow).unwrap()[col_range.clone()], view.is_aa())
-        };
+        let termrow = (i + view.sequence_row_offset()) as u16;
+        let seq = &displayed_seq(view, alnrow).unwrap()[col_range.clone()];
         draw_sequence(io, view.namewidth + 1, is_aa, seq, termrow)?;
     }
     Ok(())
@@ -355,28 +424,28 @@ fn draw_sequence<T: Write>(
 }
 
 fn draw_consensus_sequences<T: Write>(io: &mut TerminalIO<T>, view: &View) -> Result<()> {
+    let consensus_row = match view.consensus_row() {
+        Some(row) => row,
+        None => return Ok(()),
+    };
     let col_range = match view.seq_col_range() {
         Some(n) => n,
         None => return Ok(()),
     };
 
     // Determine if we're in amino acid mode (either native AA or translated DNA)
-    let is_aa = view.is_aa() || view.translated;
+    let is_aa = display_is_aa(view);
 
     // First draw top row
     let cons = view.consensus();
     let cons_seq = &cons[col_range.clone()];
-    draw_top_consensus(io, view.namewidth + 1, is_aa, cons_seq)?;
+    draw_top_consensus(io, view.namewidth + 1, consensus_row, is_aa, cons_seq)?;
 
     // Then draw rest, if applicable
     if let Some(alnrows) = view.seq_row_range() {
         for (i, alnrow) in alnrows.enumerate() {
-            let termrow = (i + HEADER_LINES + 1) as u16;
-            let seq: &[u8] = if view.translated {
-                &view.translated_seq(alnrow).unwrap()[col_range.clone()]
-            } else {
-                &view.seq(alnrow).unwrap()[col_range.clone()]
-            };
+            let termrow = (i + view.sequence_row_offset()) as u16;
+            let seq = &displayed_seq(view, alnrow).unwrap()[col_range.clone()];
             draw_consensus_other_seq(io, view.namewidth + 1, termrow, is_aa, seq, cons_seq)?
         }
     }
@@ -386,10 +455,11 @@ fn draw_consensus_sequences<T: Write>(io: &mut TerminalIO<T>, view: &View) -> Re
 fn draw_top_consensus<T: Write>(
     io: &mut TerminalIO<T>,
     colstart: u16,
+    termrow: u16,
     is_aa: bool,
     seq: &[Option<NonZeroU8>],
 ) -> Result<()> {
-    queue!(io.io, cursor::MoveTo(colstart, HEADER_LINES as u16),)?;
+    queue!(io.io, cursor::MoveTo(colstart, termrow),)?;
     for maybe_base in seq {
         let (background_color, symbol) = if let Some(byte) = maybe_base {
             let bc = if is_aa {
@@ -713,25 +783,21 @@ fn default_loop<T: Write>(io: &mut TerminalIO<T>, view: &mut View) -> Result<()>
                 if kevent == KeyEvent::new(KeyCode::Char('c'), event::KeyModifiers::NONE)
                     || kevent == KeyEvent::new(KeyCode::Char('C'), event::KeyModifiers::NONE)
                 {
-                    // Show message if consensus not yet computed for current mode
-                    if !view.consensus_computed() {
-                        execute!(
-                            io.io,
-                            ResetColor,
-                            terminal::Clear(ClearType::All),
-                            cursor::MoveTo(0, 0),
-                            Print("Calculating consensus..."),
-                        )?;
-                        // Access consensus to trigger computation
-                        let _ = view.consensus();
+                    if !view.consensus {
+                        ensure_consensus_ready(io, view)?;
                     }
-                    view.consensus = !view.consensus;
+                    update_top_row_state(view, |view| view.consensus = !view.consensus);
+                    ensure_visible_conservation_ready(io, view)?;
+                    draw_default_mode_screen(io, view)?;
+                    continue;
+                };
 
-                    // Setting consensus moves everything a tick down, so we
-                    // compensate by moving the view. Also, this prevents us
-                    // from going out of bounds when toggling consensus
-                    let delta = if view.consensus { 1 } else { -1 };
-                    view.move_view(delta, 0);
+                // Shift to/from conservation view
+                if kevent == KeyEvent::new(KeyCode::Char('i'), event::KeyModifiers::NONE)
+                    || kevent == KeyEvent::new(KeyCode::Char('I'), event::KeyModifiers::NONE)
+                {
+                    update_top_row_state(view, |view| view.conservation = !view.conservation);
+                    ensure_visible_conservation_ready(io, view)?;
                     draw_default_mode_screen(io, view)?;
                     continue;
                 };
@@ -743,18 +809,13 @@ fn default_loop<T: Write>(io: &mut TerminalIO<T>, view: &mut View) -> Result<()>
                 {
                     // Show message if translation not yet computed
                     if !view.translation_computed() {
-                        execute!(
-                            io.io,
-                            ResetColor,
-                            terminal::Clear(ClearType::All),
-                            cursor::MoveTo(0, 0),
-                            Print("Translating sequences..."),
-                        )?;
+                        show_progress_message(io, "Translating sequences...")?;
                     }
 
                     // Check for translation errors
                     if let Err(e) = view.translated_seqs() {
                         // Display error and wait for keypress
+                        ensure_visible_conservation_ready(io, view)?;
                         draw_default_mode_screen(io, view)?;
                         draw_error_footer(io, view, &e.to_string())?;
                         io.io.flush()?;
@@ -778,10 +839,10 @@ fn default_loop<T: Write>(io: &mut TerminalIO<T>, view: &mut View) -> Result<()>
                     // Turn off consensus display when switching modes (different alphabets)
                     // Note: consensus caches are preserved for each mode
                     if view.consensus {
-                        view.consensus = false;
-                        view.move_view(-1, 0);
+                        update_top_row_state(view, |view| view.consensus = false);
                     }
 
+                    ensure_visible_conservation_ready(io, view)?;
                     draw_default_mode_screen(io, view)?;
                     continue;
                 };
@@ -801,9 +862,9 @@ fn default_loop<T: Write>(io: &mut TerminalIO<T>, view: &mut View) -> Result<()>
                             view.translated = false;
                             view.colstart *= 3;
                             if view.consensus {
-                                view.consensus = false;
-                                view.move_view(-1, 0);
+                                update_top_row_state(view, |view| view.consensus = false);
                             }
+                            ensure_visible_conservation_ready(io, view)?;
                             draw_default_mode_screen(io, view)?;
                             draw_error_footer(io, view, &err_msg)?;
                             io.io.flush()?;
@@ -820,6 +881,8 @@ fn default_loop<T: Write>(io: &mut TerminalIO<T>, view: &mut View) -> Result<()>
                         if view.colstart > max_col {
                             view.colstart = max_col;
                         }
+
+                        ensure_visible_conservation_ready(io, view)?;
                     }
 
                     draw_default_mode_screen(io, view)?;
@@ -828,6 +891,7 @@ fn default_loop<T: Write>(io: &mut TerminalIO<T>, view: &mut View) -> Result<()>
             }
             Event::Resize(ncols, nrows) => {
                 view.resize(ncols, nrows);
+                ensure_visible_conservation_ready(io, view)?;
                 draw_default_mode_screen(io, view)?;
                 continue;
             }
@@ -966,13 +1030,9 @@ fn search_loop<T: Write>(io: &mut TerminalIO<T>, view: &mut View) -> Result<()> 
                         let seq_col =
                             start.saturating_sub(view.colstart) as u16 + (view.namewidth + 1);
                         let highlight_str = unsafe {
-                            if view.translated {
-                                std::str::from_utf8_unchecked(
-                                    &view.translated_seq(row).unwrap()[start..stop],
-                                )
-                            } else {
-                                std::str::from_utf8_unchecked(&view.seq(row).unwrap()[start..stop])
-                            }
+                            std::str::from_utf8_unchecked(
+                                &displayed_seq(view, row).unwrap()[start..stop],
+                            )
                         };
                         draw_highlight(io, seq_row, seq_col, view.term_ncols, highlight_str)?;
                         select_loop(io, view, row)?;
