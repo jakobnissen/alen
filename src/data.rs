@@ -573,12 +573,12 @@ impl View {
     /// Resize the view to the current terminal window, but do not draw anything
     pub fn resize(&mut self, ncols: u16, nrows: u16) {
         // Get terminal size, and set it.
-        let (oldcol, oldrow) = (self.colstart, self.rowstart);
+        let oldcol = self.colstart;
         self.term_nrows = nrows;
         self.term_ncols = ncols;
 
         // Calculate new starts (if you zoom out)
-        self.rowstart = calculate_start(oldrow, 0, self.seq_nrows_display(), self.nrows());
+        self.clamp_rowstart();
         self.colstart = calculate_start(oldcol, 0, self.seq_ncols_display(), self.ncols());
 
         // Calculate new namewidth
@@ -591,6 +591,10 @@ impl View {
     pub fn move_view(&mut self, dy: isize, dx: isize) {
         self.rowstart = calculate_start(self.rowstart, dy, self.seq_nrows_display(), self.nrows());
         self.colstart = calculate_start(self.colstart, dx, self.seq_ncols_display(), self.ncols());
+    }
+
+    pub fn clamp_rowstart(&mut self) {
+        self.rowstart = calculate_start(self.rowstart, 0, self.seq_nrows_display(), self.nrows());
     }
 
     // Returns None if operation failed, Some(()) otherwise

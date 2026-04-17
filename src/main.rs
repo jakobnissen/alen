@@ -99,12 +99,8 @@ fn ensure_visible_conservation_ready<T: Write>(io: &mut TerminalIO<T>, view: &Vi
 }
 
 fn update_top_row_state(view: &mut View, update: impl FnOnce(&mut View)) {
-    let old_rows = view.extra_top_rows() as isize;
     update(view);
-    let new_rows = view.extra_top_rows() as isize;
-    if new_rows != old_rows {
-        view.move_view(new_rows - old_rows, 0);
-    }
+    view.clamp_rowstart();
 }
 
 fn display_is_aa(view: &View) -> bool {
