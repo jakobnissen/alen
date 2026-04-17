@@ -1,6 +1,5 @@
 pub const PRINTABLE_ASCII_OFFSET: u8 = b'!';
 pub const PRINTABLE_ASCII_LEN: usize = (b'~' - b'!' + 1) as usize;
-// Keep U out of this set so RNA alignments do not auto-detect as amino acids.
 const AMINO_ACID_DETECTION_BYTES: &[u8; 11] = b"*EFIJLOPQXZ";
 
 pub const fn is_printable_ascii(byte: u8) -> bool {
