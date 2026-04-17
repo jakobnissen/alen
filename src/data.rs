@@ -615,7 +615,7 @@ impl View {
     pub fn order_original(&mut self) {
         self.aln
             .entries
-            .sort_unstable_by(|a, b| a.original_index.cmp(&b.original_index))
+            .sort_unstable_by_key(|entry| entry.original_index)
     }
 
     pub fn order(&mut self) {
