@@ -1,3 +1,5 @@
+use crate::alphabet::{self, Alphabet};
+use crate::conservation;
 use crate::constants::{FOOTER_LINES, HEADER_LINES};
 use crate::translate::TranslationError;
 
@@ -84,69 +86,53 @@ impl Graphemes {
     }
 }
 
-// Bitmap of ASCII values 1 << (x - b'E')
-// since first letter only in AA alphabet is E.
-// Asterisk (*) is also AA only, but we check that separately
-const ONLY_AA: u64 = 0x00281cb300281cb3;
-const ONLY_AA_OFFSET: u8 = b'E';
-
-// Returns whether it's an AA alphabet, else it default to DNA.
-fn verify_alphabet(entries: &[Entry], must_aa: bool) -> Result<bool> {
+fn verify_alphabet(entries: &[Entry], must_aa: bool) -> Result<Alphabet> {
     let mut must_be_aa = must_aa;
     for entry in entries.iter() {
         for &byte in entry.seq.iter() {
-            // Printable ASCII range: ! to ~
-            if !(33..=126).contains(&byte) {
+            if !byte.is_ascii_graphic() {
                 return Err(anyhow!(
                     "Sequence named \"{}\" contains non-ASCII-printable byte 0x{:x}",
                     entry.graphemes.string,
                     byte
                 ));
             }
-            // It's asterisk, or else it's both at least ONLY_AA_OFFSET (meaning)
-            // at least the value of the first only-AA character, and also found in the ONLY_AA bitmap.
-            must_be_aa |= (byte == b'*')
-                | ((ONLY_AA_OFFSET..=b'z').contains(&byte)
-                    & ((ONLY_AA.wrapping_shr(byte.wrapping_sub(ONLY_AA_OFFSET).into()) & 1) == 1));
+            must_be_aa |= alphabet::indicates_amino_acid(byte);
         }
     }
-    Ok(must_be_aa)
+    Ok(if must_be_aa {
+        Alphabet::AminoAcid
+    } else {
+        Alphabet::Nucleotide
+    })
 }
 
-fn calculate_consensus<'a, T: Iterator<Item = &'a Vec<u8>>>(
-    seqs: T,
+fn calculate_consensus<'a>(
+    seqs: impl IntoIterator<Item = &'a [u8]>,
     ncols: usize,
-    is_aa: bool,
+    seq_alphabet: Alphabet,
 ) -> Vec<Option<NonZeroU8>> {
-    // We have verified seq is between ASCII 33 and 126, inclusive.
-    let offset = b'!';
+    let offset = alphabet::PRINTABLE_ASCII_OFFSET;
     let nonzero_offset = NonZeroU8::new(offset).unwrap();
-    let mut counts = vec![[0u32; 126 - 33 + 1]; ncols];
+    let mut counts = vec![[0u32; alphabet::PRINTABLE_ASCII_LEN]; ncols];
+    let ambiguous_bytes = seq_alphabet.ambiguous_bytes();
 
-    // First loop over sequences in memory order
     for seq in seqs {
-        for (byte, arr) in seq.iter().zip(counts.iter_mut()) {
-            arr[(byte - offset) as usize] += 1
+        for (&byte, arr) in seq.iter().zip(counts.iter_mut()) {
+            arr[(byte - offset) as usize] += 1;
         }
     }
 
     for arr in counts.iter_mut() {
-        // Uppercase all characters
-        for i in b'a'..=b'z' {
-            arr[(i - offset - 32) as usize] += arr[(i - offset) as usize];
-            arr[(i - offset) as usize] = 0
+        for byte in b'a'..=b'z' {
+            let lower_index = (byte - offset) as usize;
+            let upper_index = (byte.to_ascii_uppercase() - offset) as usize;
+            arr[upper_index] += arr[lower_index];
+            arr[lower_index] = 0;
         }
 
-        // We set all ambiguous bases/AAs to 0.
-        // These are useless in the consensus
-        if is_aa {
-            for &i in b"BJOUXZ" {
-                arr[(i - offset) as usize] = 0;
-            }
-        } else {
-            for &i in b"MRSVWYHKDBN" {
-                arr[(i - offset) as usize] = 0;
-            }
+        for &byte in ambiguous_bytes {
+            arr[(byte - offset) as usize] = 0;
         }
     }
 
@@ -181,24 +167,6 @@ fn move_element<T>(v: &mut [T], from: usize, to: usize) -> Option<()> {
     Some(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_move_element() {
-        let mut v = vec![1, 2, 3, 4, 5];
-        move_element(&mut v, 1, 3);
-        assert_eq!(v, vec![1, 3, 4, 2, 5]);
-        move_element(&mut v, 3, 1);
-        assert_eq!(v, vec![1, 2, 3, 4, 5]);
-        assert_eq!(move_element(&mut v, 0, 5), None);
-        assert_eq!(v, vec![1, 2, 3, 4, 5]);
-        move_element(&mut v, 3, 0);
-        assert_eq!(v, vec![4, 1, 2, 3, 5]);
-    }
-}
-
 struct Entry {
     graphemes: Graphemes,
     seq: Vec<u8>,
@@ -215,12 +183,16 @@ pub struct Alignment {
     longest_name: usize,
     // we calculate this lazily upon demand (for nucleotide view)
     consensus: OnceCell<Vec<Option<NonZeroU8>>>,
+    // conservation profile for nucleotide / amino acid view
+    conservation: OnceCell<Vec<f64>>,
     // consensus for translated protein view (separate cache, one per reading frame)
     translated_consensus: [OnceCell<Vec<Option<NonZeroU8>>>; 3],
+    // conservation profile for translated protein view (separate cache, one per reading frame)
+    translated_conservation: [OnceCell<Vec<f64>>; 3],
     // When sorting entries by |ent| order[ent.original_index], the rows are ordered.
     // also calculate this lazily
     order: OnceCell<Vec<u32>>,
-    is_aa: bool,
+    alphabet: Alphabet,
     // Translated protein sequences (lazily computed, one per reading frame)
     translated: [OnceCell<Result<Vec<Vec<u8>>, TranslationError>>; 3],
 }
@@ -296,16 +268,18 @@ impl Alignment {
         }
 
         // Verify alphabet
-        let is_aa = verify_alphabet(&entries, must_aa)?;
+        let alphabet = verify_alphabet(&entries, must_aa)?;
 
         let longest_name = entries.iter().map(|v| v.graphemes.len()).max().unwrap();
         Ok(Alignment {
             entries,
             longest_name,
             consensus: OnceCell::new(),
+            conservation: OnceCell::new(),
             translated_consensus: [OnceCell::new(), OnceCell::new(), OnceCell::new()],
+            translated_conservation: [OnceCell::new(), OnceCell::new(), OnceCell::new()],
             order: OnceCell::new(),
-            is_aa,
+            alphabet,
             translated: [OnceCell::new(), OnceCell::new(), OnceCell::new()],
         })
     }
@@ -440,10 +414,11 @@ pub struct View {
     pub colstart: usize,
     pub term_nrows: u16, // obtained from terminal
     pub term_ncols: u16,
-    pub namewidth: u16,   // number of graphemes of each name displayed
-    pub consensus: bool,  // if consensus view is shown
-    pub translated: bool, // if showing translated protein view (DNA only)
-    pub frame: u8,        // reading frame for translation (0, 1, or 2)
+    pub namewidth: u16,     // number of graphemes of each name displayed
+    pub consensus: bool,    // if consensus view is shown
+    pub conservation: bool, // if conservation row is shown
+    pub translated: bool,   // if showing translated protein view (DNA only)
+    pub frame: u8,          // reading frame for translation (0, 1, or 2)
     aln: Alignment,
 }
 
@@ -457,6 +432,7 @@ impl View {
             term_ncols: 0,
             namewidth: 0,
             consensus: false,
+            conservation: false,
             translated: false,
             frame: 0,
             aln,
@@ -480,25 +456,29 @@ impl View {
         self.aln.entries.get(n).map(|x| &x.graphemes)
     }
 
-    pub fn seqs(&self) -> impl Iterator<Item = &Vec<u8>> {
-        self.aln.entries.iter().map(|e| &e.seq)
+    pub fn seqs(&self) -> impl Iterator<Item = &[u8]> + '_ {
+        self.aln.entries.iter().map(|e| e.seq.as_slice())
     }
 
-    pub fn seq(&self, n: usize) -> Option<&Vec<u8>> {
-        self.aln.entries.get(n).map(|x| &x.seq)
+    pub fn seq(&self, n: usize) -> Option<&[u8]> {
+        self.aln.entries.get(n).map(|x| x.seq.as_slice())
     }
 
     /// Get the consensus sequence for the current view (nucleotide or translated).
     /// Computes lazily on first access for each mode.
-    pub fn consensus(&self) -> &Vec<Option<NonZeroU8>> {
+    pub fn consensus(&self) -> &[Option<NonZeroU8>] {
         if self.translated {
             self.aln.translated_consensus[self.frame as usize].get_or_init(|| {
                 let seqs = self.translated_seqs().unwrap();
-                calculate_consensus(&mut seqs.iter(), seqs[0].len(), true)
+                calculate_consensus(
+                    seqs.iter().map(Vec::as_slice),
+                    seqs[0].len(),
+                    Alphabet::AminoAcid,
+                )
             })
         } else {
             self.aln.consensus.get_or_init(|| {
-                calculate_consensus(&mut self.seqs(), self.aln.ncols(), self.aln.is_aa)
+                calculate_consensus(self.seqs(), self.aln.ncols(), self.aln.alphabet)
             })
         }
     }
@@ -514,13 +494,62 @@ impl View {
         }
     }
 
-    pub fn is_aa(&self) -> bool {
-        self.aln.is_aa
+    /// Get per-column conservation for the current view (nucleotide or translated).
+    /// Computes lazily on first access for each mode.
+    pub fn conservation(&self) -> &[f64] {
+        if self.translated {
+            self.aln.translated_conservation[self.frame as usize].get_or_init(|| {
+                let seqs = self
+                    .translated_seqs()
+                    .expect("translated conservation requires successful translation");
+                conservation::compute_conservation_profile(
+                    seqs.iter().map(Vec::as_slice),
+                    seqs[0].len(),
+                    Alphabet::AminoAcid,
+                )
+            })
+        } else {
+            self.aln.conservation.get_or_init(|| {
+                conservation::compute_conservation_profile(
+                    self.seqs(),
+                    self.aln.ncols(),
+                    self.aln.alphabet,
+                )
+            })
+        }
+    }
+
+    /// Check if conservation has been computed for current view mode.
+    pub fn conservation_computed(&self) -> bool {
+        if self.translated {
+            self.aln.translated_conservation[self.frame as usize]
+                .get()
+                .is_some()
+        } else {
+            self.aln.conservation.get().is_some()
+        }
+    }
+
+    pub fn conservation_if_computed(&self) -> Option<&[f64]> {
+        if self.translated {
+            self.aln.translated_conservation[self.frame as usize]
+                .get()
+                .map(Vec::as_slice)
+        } else {
+            self.aln.conservation.get().map(Vec::as_slice)
+        }
+    }
+
+    pub fn alphabet(&self) -> Alphabet {
+        self.aln.alphabet
     }
 
     /// Check if source is nucleotide (translation only valid for DNA / RNA)
     pub fn can_translate(&self) -> bool {
-        !self.aln.is_aa
+        match self.aln.alphabet {
+            Alphabet::AminoAcid => false,
+            Alphabet::Nucleotide => true,
+        }
     }
 
     /// Check if translation has been computed
@@ -530,7 +559,7 @@ impl View {
 
     /// Get translated sequences (computed lazily).
     /// Returns Ok(&sequences) on success, Err(&error) if translation failed.
-    pub fn translated_seqs(&self) -> Result<&Vec<Vec<u8>>, &TranslationError> {
+    pub fn translated_seqs(&self) -> Result<&[Vec<u8>], &TranslationError> {
         let frame = self.frame as usize;
         self.aln.translated[frame]
             .get_or_init(|| {
@@ -541,24 +570,25 @@ impl View {
                     .collect::<Result<Vec<_>, _>>()
             })
             .as_ref()
+            .map(Vec::as_slice)
     }
 
     /// Get a single translated sequence by index.
     /// Panics on out-of-bounds (programmer error).
-    pub fn translated_seq(&self, n: usize) -> Option<&Vec<u8>> {
+    pub fn translated_seq(&self, n: usize) -> Option<&[u8]> {
         let seqs = self.translated_seqs().ok()?;
-        Some(&seqs[n])
+        Some(seqs[n].as_slice())
     }
 
     /// Resize the view to the current terminal window, but do not draw anything
     pub fn resize(&mut self, ncols: u16, nrows: u16) {
         // Get terminal size, and set it.
-        let (oldcol, oldrow) = (self.colstart, self.rowstart);
+        let oldcol = self.colstart;
         self.term_nrows = nrows;
         self.term_ncols = ncols;
 
         // Calculate new starts (if you zoom out)
-        self.rowstart = calculate_start(oldrow, 0, self.seq_nrows_display(), self.nrows());
+        self.clamp_rowstart();
         self.colstart = calculate_start(oldcol, 0, self.seq_ncols_display(), self.ncols());
 
         // Calculate new namewidth
@@ -571,6 +601,10 @@ impl View {
     pub fn move_view(&mut self, dy: isize, dx: isize) {
         self.rowstart = calculate_start(self.rowstart, dy, self.seq_nrows_display(), self.nrows());
         self.colstart = calculate_start(self.colstart, dx, self.seq_ncols_display(), self.ncols());
+    }
+
+    pub fn clamp_rowstart(&mut self) {
+        self.rowstart = calculate_start(self.rowstart, 0, self.seq_nrows_display(), self.nrows());
     }
 
     // Returns None if operation failed, Some(()) otherwise
@@ -591,7 +625,7 @@ impl View {
     pub fn order_original(&mut self) {
         self.aln
             .entries
-            .sort_unstable_by(|a, b| a.original_index.cmp(&b.original_index))
+            .sort_unstable_by_key(|entry| entry.original_index)
     }
 
     pub fn order(&mut self) {
@@ -610,9 +644,26 @@ impl View {
         }
     }
 
+    pub fn extra_top_rows(&self) -> usize {
+        let (conservation_row, consensus_row) = self.top_overlay_rows();
+        conservation_row.is_some() as usize + consensus_row.is_some() as usize
+    }
+
+    pub fn sequence_row_offset(&self) -> usize {
+        HEADER_LINES + self.extra_top_rows()
+    }
+
+    pub fn conservation_row(&self) -> Option<u16> {
+        self.top_overlay_rows().0
+    }
+
+    pub fn consensus_row(&self) -> Option<u16> {
+        self.top_overlay_rows().1
+    }
+
     pub fn seq_nrows_display(&self) -> usize {
         (self.term_nrows as usize)
-            .saturating_sub(HEADER_LINES + FOOTER_LINES + self.consensus as usize)
+            .saturating_sub(HEADER_LINES + FOOTER_LINES + self.extra_top_rows())
     }
 
     // Last valid self.colstart value
@@ -643,6 +694,30 @@ impl View {
         }
     }
 
+    fn top_overlay_rows(&self) -> (Option<u16>, Option<u16>) {
+        let mut next_row = HEADER_LINES as u16;
+        let available_rows = (self.term_nrows as usize).saturating_sub(HEADER_LINES + FOOTER_LINES);
+        let consensus_visible = self.consensus && available_rows > 0;
+        let conservation_visible =
+            self.conservation && available_rows > usize::from(consensus_visible);
+
+        let conservation_row = if conservation_visible {
+            let row = next_row;
+            next_row += 1;
+            Some(row)
+        } else {
+            None
+        };
+
+        let consensus_row = if consensus_visible {
+            Some(next_row)
+        } else {
+            None
+        };
+
+        (conservation_row, consensus_row)
+    }
+
     // Returns None if the row is not drawn on screen, and the u16 otherwise
     pub fn display_row_of_index(&self, index: usize) -> Option<u16> {
         match self.seq_row_range() {
@@ -650,14 +725,73 @@ impl View {
             Some(range) => {
                 if range.contains(&index) {
                     Some(
-                        (index.checked_sub(self.rowstart).unwrap()
-                            + HEADER_LINES
-                            + self.consensus as usize) as u16,
+                        (index.checked_sub(self.rowstart).unwrap() + self.sequence_row_offset())
+                            as u16,
                     )
                 } else {
                     None
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::alphabet::Alphabet;
+
+    fn consensus_bytes(consensus: &[Option<NonZeroU8>]) -> Vec<Option<u8>> {
+        consensus
+            .iter()
+            .map(|maybe_byte| maybe_byte.map(NonZeroU8::get))
+            .collect()
+    }
+
+    #[test]
+    fn test_move_element() {
+        let mut v = vec![1, 2, 3, 4, 5];
+        move_element(&mut v, 1, 3);
+        assert_eq!(v, vec![1, 3, 4, 2, 5]);
+        move_element(&mut v, 3, 1);
+        assert_eq!(v, vec![1, 2, 3, 4, 5]);
+        assert_eq!(move_element(&mut v, 0, 5), None);
+        assert_eq!(v, vec![1, 2, 3, 4, 5]);
+        move_element(&mut v, 3, 0);
+        assert_eq!(v, vec![4, 1, 2, 3, 5]);
+    }
+
+    #[test]
+    fn test_calculate_consensus() {
+        let gap_consensus = calculate_consensus(
+            [b"A".as_slice(), b"-".as_slice(), b"-".as_slice()],
+            1,
+            Alphabet::Nucleotide,
+        );
+        assert_eq!(consensus_bytes(&gap_consensus), vec![Some(b'-')]);
+
+        let dot_consensus = calculate_consensus(
+            [b"A".as_slice(), b".".as_slice(), b".".as_slice()],
+            1,
+            Alphabet::Nucleotide,
+        );
+        assert_eq!(consensus_bytes(&dot_consensus), vec![Some(b'.')]);
+
+        let nucleotide_consensus = calculate_consensus(
+            [b"a".as_slice(), b"A".as_slice(), b"N".as_slice()],
+            1,
+            Alphabet::Nucleotide,
+        );
+        assert_eq!(consensus_bytes(&nucleotide_consensus), vec![Some(b'A')]);
+
+        let amino_acid_consensus = calculate_consensus(
+            [b"ME".as_slice(), b"ME".as_slice(), b"MM".as_slice()],
+            2,
+            Alphabet::AminoAcid,
+        );
+        assert_eq!(
+            consensus_bytes(&amino_acid_consensus),
+            vec![Some(b'M'), Some(b'E')]
+        );
     }
 }
